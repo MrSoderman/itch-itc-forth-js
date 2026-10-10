@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<meta charset="utf-8">
+<title>Forth in Stone</title>
+<style>
+  body { font: 14px monospace; background: #111; color: #0ff; padding: 20px; }
+  textarea, pre { width: 100%; box-sizing: border-box; background: #000; color: #0f0; border: 1px solid #0ff; padding: 8px; }
+  textarea { height: 480px; color: #0ff; }
+  button { font: inherit; background: #000; color: #0ff; border: 1px solid #0ff; padding: 4px 10px; cursor: pointer; }
+  button.on { background: #0ff; color: #000; }
+</style>
+<p>FORTH IN STONE: the JavaScript at the bottom never changes. Only the Forth grows.</p>
+<button onclick="step(1)">1 STONE: Forth in JavaScript</button>
+<button onclick="step(2)">2 CLAY: the compiler</button>
+<button onclick="step(3)">3 MIRROR: Forth in Forth</button>
+<button onclick="go()">RUN</button>
+<textarea id="src" spellcheck="false"></textarea>
+<pre id="out"></pre>
+<p>Next: ITCH. The same ideas on a real machine: every word lives as bytes in one 64K memory, so
+Forth can read, change and save its own body ( SEE, ROM images ); two loops instead of STATE; 32
+code words a 6502 could run; and a screen, keys, sound, tasks and checks for mistakes.</p>
+
+<script type="text/forth" id="stone">
+\ ==== STEP 1, STONE: the interpreter ====
+\ The JavaScript holds two interpreters. The INNER one runs words: it walks through a
+\ word's body, one cell at a time ( NEXT ). The OUTER one reads this text: it takes a
+\ token, finds it and runs it, or turns it into a number. That is all Forth can do yet:
+\ run words. It cannot make new ones: there is no : and no ; .
+2 3 + .  10 4 - .  6 7 * .  CR                  \ 5 6 42 : a calculator
+1 2 SWAP . .  5 DUP * .  CR                     \ 1 2 25 : the stack
+WORD X (CREATE) 0 ,                             \ a variable by hand: a name, a cell
+7 X !  X @ .  CR                                \ 7
+' DUP .  CR                                     \ a word is a value too: tick finds it
+</script>
+
+<script type="text/forth" id="clay">
+\ ==== STEP 2, CLAY: the compiler, written in Forth ====
+\ There is no colon yet, so the first three words are built by hand, cell by cell:
+\ WORD reads a name, HEADER starts a word, COMPILE, and LITERAL add cells, REVEAL
+\ makes it findable. This is all a compiler is: words writing cells into a list.
+\ STATE is 0 while the reader runs words, -1 while it compiles them.
+WORD ] HEADER  -1 LITERAL ' STATE COMPILE, ' ! COMPILE,  ' EXIT COMPILE,  REVEAL
+WORD : HEADER  ' WORD COMPILE, ' HEADER COMPILE, ' ] COMPILE,  ' EXIT COMPILE,  REVEAL
+WORD ; HEADER  ' EXIT LITERAL ' COMPILE, COMPILE, ' REVEAL COMPILE,
+               0 LITERAL ' STATE COMPILE, ' ! COMPILE,  ' EXIT COMPILE,  REVEAL IMMEDIATE
+
+\ From here on there is a colon. IMMEDIATE words run while a word is being built.
+: [    0 STATE ! ; IMMEDIATE
+: [']  ' LITERAL ; IMMEDIATE                   \ tick, inside a definition
+
+\ Control flow: HERE is the next free cell; IF leaves a hole ( 0 ), THEN fills it.
+: IF     ['] 0BRANCH COMPILE, HERE 0 COMPILE, ; IMMEDIATE
+: THEN   HERE SWAP PATCH ; IMMEDIATE
+: ELSE   ['] BRANCH COMPILE, HERE 0 COMPILE, SWAP  HERE SWAP PATCH ; IMMEDIATE
+: BEGIN  HERE ; IMMEDIATE
+: UNTIL  ['] 0BRANCH COMPILE, COMPILE, ; IMMEDIATE
+: WHILE  ['] 0BRANCH COMPILE, HERE 0 COMPILE, SWAP ; IMMEDIATE
+: REPEAT ['] BRANCH COMPILE, COMPILE,  HERE SWAP PATCH ; IMMEDIATE
+: ?DUP   DUP IF DUP THEN ;
+
+\ The reader learns new syntax, from Forth:
+: S"  WORD UNQUOTE  STATE @ IF LITERAL THEN ; IMMEDIATE      \ a one-word string
+: (   BEGIN WORD DUP 0 = SWAP S" )" = OR UNTIL ; IMMEDIATE  \ ( a comment )
+
+\ The strong words: words that make words.
+: CREATE    ( "name" -- )  WORD (CREATE) ;
+: DOES>     ['] (DOES>) COMPILE, ; IMMEDIATE    ( the rest of the word is its action )
+: CONSTANT  ( n "name" -- )  CREATE , DOES> @ ;
+: VARIABLE  ( "name" -- )  CREATE 0 , ;
+: DEFER     ( "name" -- )  CREATE 0 , DOES> @ EXECUTE ;   ( a plug for a word )
+: IS        ( w "name" -- )  ' >BODY ! ;                  ( at the prompt )
+: [IS]      ( "name" -- )  ' >BODY LITERAL ['] ! COMPILE, ; IMMEDIATE   ( in a word )
+</script>
+
+<script type="text/forth" id="clay-demo">
+\ ---- Using the compiler ----
+: SQUARE ( n -- n*n ) DUP * ;   5 SQUARE .  CR       \ 25
+42 CONSTANT ANSWER  VARIABLE X  ANSWER .  7 X !  X @ .  CR   \ 42 7
+DEFER GREET  : HI 1 . ;  : BYE 2 . ;  : FLIP ['] BYE [IS] GREET ;
+' HI IS GREET  GREET  FLIP  GREET  CR                \ 1 2
+: ZERO? ( n -- )  0 = IF 1 ELSE 2 THEN . ;   0 ZERO?  5 ZERO?  CR   \ 1 2
+: COUNTDOWN ( n -- )  BEGIN DUP . 1 - DUP 0 = UNTIL DROP ;   5 COUNTDOWN  CR
+: NAMED ( name -- ) (CREATE) 0 , ;   S" V" 1 + NAMED   9 V1 !  V1 @ .  CR   \ 9
+</script>
+
+<script type="text/forth" id="mirror">
+\ ==== STEP 3, MIRROR: Forth in Forth ( metacircular ) ====
+\ Forth writes its own outer interpreter. When INTERPRET runs, it reads the rest of
+\ this text itself, and the JavaScript reader waits for it to finish: Forth reads Forth.
+\ UNKNOWN is a plug, so even what happens to a word Forth does not know is up to you.
+DEFER UNKNOWN  ' NOT-FOUND IS UNKNOWN
+: INTERPRET ( -- )
+  BEGIN WORD ?DUP WHILE                          ( token )
+    FIND ?DUP IF                                 ( word flag: 1 immediate, -1 not )
+      1 = STATE @ 0 = OR IF EXECUTE ELSE COMPILE, THEN
+    ELSE NUMBER? IF STATE @ IF LITERAL THEN ELSE UNKNOWN THEN
+    THEN
+  REPEAT ;
+INTERPRET
+\ ---- From here, Forth's own INTERPRET is reading ----
+: SQUARE ( n -- n*n ) DUP * ;   5 SQUARE .  CR       \ 25: the compiler still works
+: SHRUG ( token -- ) DROP 0 . ;  ' SHRUG IS UNKNOWN  \ change the reader, in Forth:
+HELLO WORLD  CR                                      \ 0 0 : unknown words now say 0
+</script>
+
+<script>
+// ==== THE STONE: the inner and the outer interpreter, and the primitives ====
+// A word is an object { name, code }. A colon word also has a body: a list of words.
+// A CREATEd word has an address in M, the data memory.
+let S, R, M, dict, latest, T, pos, th, ip;          // stacks, memory, words, input, thread
+const out = document.getElementById('out'), say = t => out.textContent += t;
+const pop = () => { if (!S.length) throw 'stack empty'; return S.pop(); };
+const word = () => pos < T.length ? T[pos++] : 0;   // the next token, or 0 at the end
+const find = t => { if (!dict[t]) throw t + ' ?'; return dict[t]; };
+
+// ---- The inner interpreter: th is the body being run, ip the place in it ----
+const EXIT  = { name: 'EXIT', code() { [th, ip] = R.pop(); } };   // back to the caller
+const LIT   = { name: 'LIT',  code() { S.push(th[ip++]); } };     // the next cell is a value
+const docol = w => { R.push([th, ip]); th = w.body; ip = 0; };    // step into a colon word
+function execute(w) {                                             // run one word to its end
+  const base = R.length; w.code(w);
+  while (R.length > base) { const x = th[ip++]; x.code(x); }     // NEXT, until it returns
+}
+
+// ---- The primitives: the only words written in JavaScript ----
+function stone() {
+  S = []; R = []; M = [0]; dict = { EXIT, LIT };    // M[0] holds STATE
+  const p = (name, code) => dict[name] = { name, code };
+  const two = f => () => { const b = pop(), a = pop(); S.push(f(a, b)); };
+  p('DUP',  () => { const a = pop(); S.push(a, a); });
+  p('DROP', pop);
+  p('SWAP', () => { const b = pop(), a = pop(); S.push(b, a); });
+  p('+', two((a, b) => a + b));                     // also joins strings: "V" 1 + is "V1"
+  p('-', two((a, b) => a - b));  p('*', two((a, b) => a * b));
+  p('=', two((a, b) => a === b ? -1 : 0));  p('OR', two((a, b) => a | b));
+  p('@', () => S.push(M[pop()] ?? 0));
+  p('!', () => { const a = pop(); M[a] = pop(); });
+  p(',', () => M.push(pop()));
+  p('STATE', () => S.push(0));                      // STATE's address in M
+  p('.',  () => { const a = pop(); say((a.name ?? a) + ' '); });   // a number, or a word's name
+  p('CR', () => say('\n'));
+  // the reader's parts
+  p('WORD',      () => S.push(word()));
+  p("'",         () => S.push(find(word())));       // tick: the next word itself
+  p('FIND',      () => { const t = pop(), w = dict[t]; w ? S.push(w, w.imm ? 1 : -1) : S.push(t, 0); });
+  p('NUMBER?',   () => { const t = pop(); /^-?\d+$/.test(t) ? S.push(+t, -1) : S.push(t, 0); });
+  p('NOT-FOUND', () => { throw pop() + ' ?'; });
+  p('UNQUOTE',   () => S.push(String(pop()).replace(/"$/, '')));
+  p('EXECUTE',   () => { const w = pop(); if (!w) throw 'DEFER not set'; w.code(w); });
+  // the builder's parts: each writes into the newest word, latest
+  p('HEADER',    () => { latest = { name: pop(), code: docol, body: [] }; });   // hidden
+  p('REVEAL',    () => { dict[latest.name] = latest; });                        // findable
+  p('IMMEDIATE', () => { latest.imm = true; });
+  p('COMPILE,',  () => latest.body.push(pop()));
+  p('LITERAL',   () => latest.body.push(LIT, pop()));
+  p('HERE',      () => S.push(latest.body.length));
+  p('PATCH',     () => { const i = pop(); latest.body[i] = pop(); });           // ( x i -- )
+  p('BRANCH',    () => { ip = th[ip]; });
+  p('0BRANCH',   () => { ip = pop() ? ip + 1 : th[ip]; });
+  // the strong words' parts
+  p('(CREATE)',  () => { const name = pop(); latest = dict[name] = { name, addr: M.length, code: w => S.push(w.addr) }; });
+  p('>BODY',     () => S.push(pop().addr));
+  p('(DOES>)',   () => { const body = th, at = ip;   // the rest of this body becomes the
+    latest.code = w => { S.push(w.addr); R.push([th, ip]); th = body; ip = at; };   // newest
+    EXIT.code(); });                                                                  // word's action
+}
+
+// ---- The outer interpreter: read a token, find it, run it or build it in ----
+function interpret() {
+  for (let t; (t = word()) !== 0; ) {
+    const w = dict[t];
+    if (w) M[0] && !w.imm ? latest.body.push(w) : execute(w);
+    else if (/^-?\d+$/.test(t)) M[0] ? latest.body.push(LIT, +t) : S.push(+t);
+    else throw t + ' ?';
+  }
+}
+function go() {
+  out.textContent = '';
+  try {
+    stone(); pos = 0;
+    T = src.value.replace(/(^|\s)\\([ \t].*)?$/gm, '$1').split(/\s+/).filter(Boolean);  // \ comments
+    interpret();
+  } catch (e) { say('\nError: ' + e); }
+  say('\nStack: ' + JSON.stringify(S.map(x => x.name || x)));
+}
+const src = document.getElementById('src'), text = id => document.getElementById(id).textContent.trim() + '\n\n';
+function step(n) {                                  // each step brings the ones before it
+  src.value = n === 1 ? text('stone') : text('clay') + (n === 2 ? text('clay-demo') : text('mirror'));
+  document.querySelectorAll('button').forEach((b, i) => b.classList.toggle('on', i === n - 1));
+  go();
+}
+step(1);
+</script>
