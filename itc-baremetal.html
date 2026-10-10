@@ -1,0 +1,507 @@
+<!DOCTYPE html><meta charset="utf-8"><meta name="viewport" content="width=device-width">
+<title>orth System</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Silkscreen&family=VT323&display=swap">
+<style>:root{color-scheme:dark;--ph:#9ff5c6;--ln:#2c2e3a}*{box-sizing:border-box}
+body{margin:0;padding:20px 16px;color:#dfe6ef;font:13px/1.5 ui-monospace,monospace;background:radial-gradient(800px 500px at 90% -10%,#5a3d1e,transparent 65%),#17120e}
+.dev{max-width:1200px;margin:auto;background:linear-gradient(#ddd7ca,#cfc8ba 20%,#a9a293);border-radius:26px;padding:12px}
+.bez{background:#14141b;border-radius:16px;padding:12px;display:grid;gap:12px;grid-template-columns:1fr 1fr}
+.bar{grid-column:1/-1;display:flex;gap:10px;align-items:center;flex-wrap:wrap;border-bottom:2px solid var(--ln);padding-bottom:8px}
+.bar b{font:20px Silkscreen,monospace;color:#f3eedf}.bar span{flex:1}#hz{font:20px VT323,monospace;color:var(--ph)}
+.bar i{width:46px;height:16px;transform:skewX(-28deg);background:linear-gradient(90deg,#e8433a 20%,#f39a2c 0 40%,#f6d23a 0 60%,#5cc85a 0 80%,#3a8ee8 0)}
+button{font:12px Silkscreen,monospace;border:0;border-radius:7px;padding:6px 12px;cursor:pointer}
+.go{background:#3fae5a}.st{background:#d9483f}.gh{background:#2b2d3a;color:#dfe6ef}:focus-visible{outline:2px solid #f6d23a}
+.col{display:grid;gap:10px;min-width:0;align-content:start}
+.crt{position:relative;aspect-ratio:4/3;max-width:100%;border-radius:18px;overflow:hidden;background:#020304;box-shadow:0 0 0 10px #08080b}
+.crt canvas{position:absolute;inset:0;width:100%;height:100%;image-rendering:pixelated}#glow{filter:blur(7px) brightness(1.5);opacity:.7;mix-blend-mode:screen}
+.crt::after{content:"";position:absolute;inset:0;pointer-events:none;background:repeating-linear-gradient(#0000 0 2px,#0006 3px,#0000 4px),radial-gradient(ellipse,#0000 58%,#000a)}
+#con,#cmd{width:100%;background:#050807;color:var(--ph);font:19px/1.1 VT323,monospace;padding:8px 10px;border:0}
+#con{margin:0;height:150px;overflow-y:auto;white-space:pre-wrap;word-break:break-word;border-radius:10px 10px 0 0}
+#cmd{border-top:1px solid #1d2a24;border-radius:0 0 10px 10px;outline:0}
+#ed{width:100%;min-height:470px;resize:vertical;border:1px solid var(--ln);border-radius:10px;background:#0f1016;color:inherit;padding:12px;font:inherit;white-space:pre-wrap;overflow:hidden auto}
+@media(max-width:900px){.bez{grid-template-columns:1fr}}</style>
+<div class="dev"><div class="bez">
+<div class="bar" id="bar"><b>FORTH SYSTEM</b><i></i><span></span><div id="hz">-- Hz</div><button class="gh" id="clear">CLEAR</button><button class="st" id="stop">STOP</button><button class="go" id="run">RUN</button></div>
+<div class="col"><div class="crt"><canvas id="scr" width="128" height="96"></canvas><canvas id="glow" width="128" height="96"></canvas></div>
+<div><pre id="con"></pre><form id="pf"><input id="cmd" spellcheck="false" autocomplete="off" placeholder="OK>"></form></div></div>
+<div class="col"><textarea id="ed" spellcheck="false" aria-label="Forth program"></textarea></div></div></div>
+
+<!-- ================================================= -->
+<!-- FORTH BEGINNING                                   -->
+<!-- ================================================= -->
+
+<script type="text/forth" id="fs-core">
+\ ==== core, on 35 primitives ====
+
+\ ---- System variables ----
+: DP 0 ; \ ( -- a ) next free byte
+: LATEST 2 ; \ ( -- a ) newest header
+: STATE 4 ; \ ( -- a ) 0 = interpret, 1 = compile
+: >IN 6 ; \ ( -- a ) parse position
+: #TIB 8 ; \ ( -- a ) input length
+: BASE 10 ; \ ( -- a ) number base
+: SRC 12 ; \ ( -- a ) input address
+: VBLANK 14 ; \ ( -- a ) xt run at 60 Hz, 0 = none
+: S0 768 ; \ ( -- a ) empty data stack (0300h)
+: DOCREATE 1 ; \ ( -- n ) code number
+: BL 32 ; \ ( -- c ) space
+
+\ ---- Basic words ----
+: NIP SWAP DROP ; \ ( a b -- b )
+: 2DUP OVER OVER ; \ ( a b -- a b a b )
+: HERE DP @ ; \ ( -- a )
+: ALLOT HERE + DP ! ; \ ( n -- )
+: , HERE ! 2 ALLOT ; \ ( x -- ) compile one cell
+: COUNT DUP 1 + SWAP C@ ; \ ( c-addr -- a n )
+: DEPTH SP@ S0 SWAP - 2 /MOD NIP ; \ ( -- n ) stack items
+: IMMEDIATE LATEST @ 2 + DUP C@ 128 OR SWAP C! ; \ set bit 7 of the count
+: ['] ' LIT, ; IMMEDIATE \ compile next xt as a literal
+: ( 41 WORD DROP ; IMMEDIATE \ comment up to )
+: CR 10 EMIT ;
+
+\ ---- Control flow ----
+: IF ['] 0BRANCH , HERE 0 , ; IMMEDIATE
+: THEN HERE SWAP ! ; IMMEDIATE
+: ELSE ['] BRANCH , HERE 0 , SWAP HERE SWAP ! ; IMMEDIATE
+: BEGIN HERE ; IMMEDIATE
+: UNTIL ['] 0BRANCH , , ; IMMEDIATE
+: AGAIN ['] BRANCH , , ; IMMEDIATE
+: WHILE ['] 0BRANCH , HERE 0 , SWAP ; IMMEDIATE
+: REPEAT ['] BRANCH , , HERE SWAP ! ; IMMEDIATE
+: ?DUP ( x -- x x | 0 ) DUP IF DUP THEN ;
+: 0= ( x -- f ) IF 0 ELSE -1 THEN ;
+: = ( a b -- f ) - 0= ;
+
+\ ---- Stack and arithmetic ----
+: 2DROP ( a b -- ) DROP DROP ;
+: ROT ( a b c -- b c a ) >R SWAP R> SWAP ;
+: 0< ( n -- f ) 0 < ;
+: > ( a b -- f ) SWAP < ;
+: NEGATE ( n -- -n ) 0 SWAP - ;
+: ABS ( n -- u ) DUP 0< IF NEGATE THEN ;
+: MIN ( a b -- n ) 2DUP > IF SWAP THEN DROP ;
+: MAX ( a b -- n ) 2DUP < IF SWAP THEN DROP ;
+: 1+ 1 + ; : 1- 1 - ; : 2* DUP + ;
+: +! ( n a -- ) SWAP OVER @ + SWAP ! ;
+\ FILL: store c, then a forward CMOVE spreads it.
+: FILL ( a n c -- ) OVER 0= IF DROP 2DROP EXIT THEN
+                           >R OVER R> SWAP C! 1- OVER 1+ SWAP CMOVE ;
+
+\ ---- Number output in BASE ----
+: U. ( u -- ) BASE @ /MOD ?DUP IF U. THEN DUP 9 SWAP < IF 7 + THEN 48 + EMIT ;
+: . ( n -- ) DUP 0 < IF 45 EMIT 0 SWAP - THEN U. 32 EMIT ;
+
+\ ---- Strings ----
+: TYPE ( a n -- ) ?DUP IF BEGIN OVER C@ EMIT 1- SWAP 1+ SWAP DUP 0= UNTIL DROP THEN DROP ;
+: (S") ( -- a n ) R> COUNT 2DUP + >R ; \ inline string; return past it
+: ,STRING ( "text" -- ) 34 WORD DUP HERE OVER C@ 1+ DUP ALLOT CMOVE DROP ;
+: S" ['] (S") , ,STRING ; IMMEDIATE \ ( -- a n ) inside definitions
+: ." ['] (S") , ,STRING ['] TYPE , ; IMMEDIATE
+: .( 41 WORD COUNT TYPE ; IMMEDIATE \ print up to )
+
+\ ---- CREATE DOES> ----
+\ header | DOCREATE | DOES> cell | data
+: >CFA ( h -- xt ) DUP 2 + C@ 31 AND + 3 + ;
+: CREATE ( "name" -- ) BL WORD HEADER DOCREATE , 0 , ;
+\ R> = the DOES> code; store it in the newest word.
+: (DOES>) ( -- ) R> LATEST @ >CFA 2 + ! ;
+: DOES> ['] (DOES>) , ; IMMEDIATE
+
+: CONSTANT ( n "name" -- ) CREATE , DOES> @ ;
+: VARIABLE ( "name" -- ) CREATE 0 , ;
+
+\ ---- DEFER IS ----
+\ IS sets a flag; the next deferred word stores the xt instead of running.
+VARIABLE IS?
+: IS ( xt -- ) -1 IS? ! ;
+: NOT-SET 63 EMIT ; \ prints ?
+: DEFER ( "name" -- ) CREATE ['] NOT-SET ,
+           DOES> IS? @ IF 0 IS? ! ! ELSE @ EXECUTE THEN ;
+
+\ ---- The reader: from here on, Forth reads Forth ----
+: INTERPRET ( -- )
+  BEGIN
+    BL WORD DUP C@ 0= IF DROP EXIT THEN \ end of input
+    DUP FIND ?DUP IF
+      NIP DUP >CFA SWAP 2 + C@ 128 AND STATE @ 0= OR
+      IF EXECUTE ELSE , THEN
+    ELSE
+      NUMBER STATE @ IF LIT, THEN
+    THEN
+  AGAIN ;
+: EVALUATE ( a n -- )
+  SRC @ >R #TIB @ >R >IN @ >R \ save the current input
+  #TIB ! SRC ! 0 >IN ! INTERPRET \ read the string
+  R> >IN ! R> #TIB ! R> SRC ! ; \ restore it
+INTERPRET \ hand over
+
+\ ---- MARKER FORGET ANEW (FENCE stops a forgotten frame word) ----
+: FENCE VBLANK @ HERE < 0= IF 0 VBLANK ! THEN ;
+: MARKER ( "name" -- ) HERE LATEST @ CREATE , , DOES> DUP @ LATEST ! 2 + @ DP ! FENCE ;
+: FORGET ( "name" -- ) BL WORD DUP FIND ?DUP IF NIP DUP @ LATEST ! DP ! FENCE ELSE (ABORT) THEN ;
+: ANEW ( "name" -- ) >IN @ BL WORD FIND ?DUP IF >CFA EXECUTE THEN >IN ! MARKER ;
+: HEX 16 BASE ! ;
+: DECIMAL 10 BASE ! ;
+
+\ ---- Screen: 128x96 bytes (colour 0-15) at C000h ----
+: W 128 ;
+: H 96 ;
+: SCREEN 49152 ; \ C000h
+: CLS ( c -- ) SCREEN W H * ROT FILL ;
+: IN? ( x y -- f ) DUP 0< 0= SWAP H < AND SWAP DUP 0< 0= SWAP W < AND AND ;
+: PLOT ( x y c -- ) >R 2DUP IN? IF W * + SCREEN + R> SWAP C! ELSE 2DROP R> DROP THEN ;
+
+\ Bresenham: integer steps only
+VARIABLE LX VARIABLE LY VARIABLE LX1 VARIABLE LY1 VARIABLE LCOL
+VARIABLE LDX VARIABLE LDY VARIABLE LSX VARIABLE LSY VARIABLE LERR
+: LINE ( x0 y0 x1 y1 c -- )
+  LCOL ! LY1 ! LX1 ! LY ! LX !
+  LX1 @ LX @ - DUP ABS LDX ! 0< IF -1 ELSE 1 THEN LSX !
+  LY1 @ LY @ - DUP ABS NEGATE LDY ! 0< IF -1 ELSE 1 THEN LSY !
+  LDX @ LDY @ + LERR !
+  BEGIN
+    LX @ LY @ LCOL @ PLOT
+    LX @ LX1 @ = LY @ LY1 @ = AND 0=
+  WHILE
+    LERR @ 2* ( e2 )
+    DUP LDY @ < 0= IF LDY @ LERR +! LSX @ LX +! THEN \ e2 >= dy: step x
+    LDX @ SWAP < 0= IF LDX @ LERR +! LSY @ LY +! THEN \ e2 <= dx: step y
+  REPEAT ;
+</script>
+<script type="text/forth" id="fs-demo">
+\ LINES: bouncing Bresenham lines with a rainbow trail
+ANEW LINES \ RUN replaces these
+
+16 CONSTANT TRAIL
+CREATE P 20 , 10 , 100 , 80 , \ x0 y0 x1 y1
+CREATE V 3 , 2 , -2 , 3 ,
+CREATE HIST TRAIL 8 * ALLOT
+VARIABLE HEAD VARIABLE T VARIABLE K
+
+: P@ ( k -- n ) 2* P + @ ;
+: V@ ( k -- n ) 2* V + @ ;
+: LIMIT ( k -- n ) 1 AND IF H ELSE W THEN 1- ;
+: BOUNCE ( -- ) 0 K !
+  BEGIN K @ 4 < WHILE
+    K @ V@ K @ 2* P + +! \ move
+    K @ P@ 0< K @ P@ K @ LIMIT > OR IF \ hit an edge?
+      K @ V@ NEGATE K @ 2* V + !
+      K @ V@ K @ 2* P + +!
+    THEN
+    1 K +!
+  REPEAT ;
+
+: ENTRY ( n -- a ) 8 * HIST + ;
+: SAVE ( -- ) 0 BEGIN DUP 4 < WHILE DUP P@ OVER 2* HEAD @ ENTRY + ! 1+ REPEAT DROP
+         HEAD @ 1+ TRAIL /MOD DROP HEAD ! ;
+: COLOR ( k -- c ) T @ 4 /MOD NIP + 8 /MOD DROP 2 + ;
+: TRAILS ( -- ) 0 K !
+  BEGIN K @ TRAIL < WHILE
+    K @ ENTRY DUP @ OVER 2 + @ ROT DUP 4 + @ SWAP 6 + @ ( x0 y0 x1 y1 )
+    K @ COLOR LINE
+    1 K +!
+  REPEAT ;
+
+: FRAME ( -- ) 0 CLS BOUNCE SAVE TRAILS 1 T +! ;
+: PREFILL TRAIL BEGIN DUP WHILE BOUNCE SAVE 1- REPEAT DROP ;
+PREFILL
+' FRAME VBLANK ! \ run FRAME at 60 Hz
+.( Bresenham lines) CR
+</script>
+<script>
+// ITC Forth, 1:1 with a 6502 or x64: one 64K byte array. [NAME] = a Forth word, machinery = hidden.
+// ---- Memory map: 16-bit little-endian cells ----
+const DP = 0, LATEST = 2, STATE = 4, TOIN = 6, NTIB = 8, BASE = 10, SRC = 12;  // system variables
+const S0 = 0x0300, R0 = 0x0400, DICT = 0x0500;  // [S0] [R0] stacks 0200-03FF grow down; dictionary up
+const WBUF = 0x7F00, TIB = 0x8000; // WORD buffer; source text
+// ---- Code numbers (assembler labels on hardware) ----
+const DOCOL = 0, DOCREATE = 1, EXIT = 2, LIT = 3, BRANCH = 4, ZBRANCH = 5, EXECUTE = 6,
+  DUP = 7, DROP = 8, SWAP = 9, OVER = 10, TOR = 11, RFROM = 12, PLUS = 13, MINUS = 14,
+  STAR = 15, DIVMOD = 16, LESS = 17, AND = 18, OR = 19, FETCH = 20, STORE = 21, CFETCH = 22,
+  CSTORE = 23, EMIT = 24, WORD = 25, HEADER = 26, TICK = 27, LITCOMMA = 28, COLON = 29,
+  SEMI = 30, BACKSLASH = 31, FIND = 32, NUMBER = 33, SPFETCH = 34, CMOVE = 35, ABORT = 36;
+const NAMES = "EXIT LIT BRANCH 0BRANCH EXECUTE DUP DROP SWAP OVER >R R> + - * /MOD < AND OR " +
+  "@ ! C@ C! EMIT WORD HEADER ' LIT, : ; \\ FIND NUMBER SP@ CMOVE (ABORT)";  // same order
+let m, IP, W, SP, RP, xtLIT, xtEXIT, out;  // memory, registers, screen
+// ---- I/O: the only host contact ----
+const emit = c => { out += String.fromCharCode(c); };  // [EMIT]
+function load(s) {  // machinery: source text into TIB
+  for (let i = 0; i < s.length; i++) m[TIB + i] = s.charCodeAt(i); wr(SRC, TIB); wr(NTIB, s.length); wr(TOIN, 0); }
+// ---- Memory and stacks (machinery) ----
+const rd = a => m[a] | m[a + 1] << 8;
+const wr = (a, v) => { m[a] = v; m[a + 1] = v >> 8; };  // the byte array wraps to 16 bits
+const s16 = v => v << 16 >> 16;  // a cell read as signed
+const push = v => { SP -= 2; wr(SP, v); };
+const pop = () => { if (SP >= S0) abort(WBUF); SP += 2; return rd(SP - 2); };
+const rpush = v => { RP -= 2; wr(RP, v); };
+const rpop = () => { RP += 2; return rd(RP - 2); };
+const comma = v => { wr(rd(DP), v); wr(DP, rd(DP) + 2); };  // [,]
+function abort(a) {  // [(ABORT)] print a and ?, jump to the top
+  for (let i = 1; i <= m[a]; i++) emit(m[a + i]); emit(32); emit(63); throw 0; }
+// ---- Dictionary: header = link(2) | flags+length(1) | name | code field(2) | body ----
+const cfa = h => h + 3 + (m[h + 2] & 31);  // [>CFA]
+function header(a) {  // [HEADER] a = counted string; linked in at once
+  const h = rd(DP), n = m[a] & 31;
+  comma(rd(LATEST)); m[h + 2] = n;
+  for (let i = 0; i < n; i++) m[h + 3 + i] = m[a + 1 + i];
+  wr(DP, h + 3 + n); wr(LATEST, h);
+}
+function find(a) {  // [FIND] walk the list; header or 0
+  for (let h = rd(LATEST); h; h = rd(h)) {
+    let i = 0; const n = m[h + 2] & 31;
+    if (n === m[a]) { while (i < n && m[h + 3 + i] === m[a + 1 + i]) i++; if (i === n) return h; }
+  }
+  return 0;
+}
+// ---- Parsing ----
+function word(d) {  // [WORD] skip delimiters d, copy a word to WBUF
+  const s = rd(SRC), end = rd(NTIB), hit = c => d === 32 ? c <= 32 : c === d;  // BL: any space
+  let i = rd(TOIN), n = 0;
+  while (i < end && hit(m[s + i])) i++;
+  while (i < end && !hit(m[s + i]) && n < 255) m[WBUF + 1 + n++] = m[s + i++];
+  m[WBUF] = n; wr(TOIN, i < end && hit(m[s + i]) ? i + 1 : i); return WBUF;  // eat the delimiter
+}
+function tick() { const h = find(word(32)); if (!h) abort(WBUF); return cfa(h); }  // [']
+function number(a) {  // [NUMBER] in BASE, optional '-', else abort
+  const neg = m[a + 1] === 45 && m[a] > 1; let v = 0;
+  for (let i = neg ? 2 : 1; i <= m[a]; i++) {
+    let d = m[a + i] - 48; d = d > 16 ? d - 7 : d > 9 ? 99 : d;  // 'A' -> 10, ':'..'@' invalid
+    if (d < 0 || d >= rd(BASE)) abort(a);
+    v = v * rd(BASE) + d;
+  }
+  return neg ? -v : v;
+}
+// ---- Inner interpreter: one routine per code. a b d = scratch ----
+function step(c) { let a, b, d;
+  switch (c) {
+    case DOCOL:    rpush(IP); IP = W + 2; break;  case EXIT:   IP = rpop(); break;
+    case DOCREATE: push(W + 4); a = rd(W + 2); if (a) { rpush(IP); IP = a; } break;  // W+2: DOES> cell
+    case LIT:      push(rd(IP)); IP += 2; break;  case BRANCH: IP = rd(IP); break;
+    case ZBRANCH:  IP = pop() ? IP + 2 : rd(IP); break;  case EXECUTE: W = pop(); step(rd(W)); break;
+    case DUP:      push(rd(SP)); break;           case DROP:   pop(); break;
+    case SWAP:     a = pop(); b = pop(); push(a); push(b); break;  case OVER: push(rd(SP + 2)); break;
+    case TOR:      rpush(pop()); break;           case RFROM:  push(rpop()); break;
+    case PLUS:     a = pop(); push(pop() + a); break;  case MINUS: a = pop(); push(pop() - a); break;
+    case STAR:     a = pop(); push(pop() * a); break;
+    case DIVMOD:   a = pop(); b = pop(); push(b % a); push((b - b % a) / a); break;  // unsigned
+    case LESS:     a = s16(pop()); push(s16(pop()) < a ? -1 : 0); break;
+    case AND:      push(pop() & pop()); break;    case OR:     push(pop() | pop()); break;
+    case FETCH:    push(rd(pop())); break;        case STORE:  a = pop(); wr(a, pop()); break;
+    case CFETCH:   push(m[pop()]); break;         case CSTORE: a = pop(); m[a] = pop(); break;
+    case EMIT:     emit(pop()); break;            case TICK:   push(tick()); break;
+    case WORD:     push(word(pop())); break;      case HEADER: header(pop()); break;
+    case COLON:    header(word(32)); comma(DOCOL); wr(STATE, 1); break;
+    case SEMI:     comma(xtEXIT); wr(STATE, 0); break;  case LITCOMMA: comma(xtLIT); comma(pop()); break;
+    case BACKSLASH: a = rd(TOIN); b = rd(SRC);  // to end of line, unless WORD ate the newline
+      if (m[b + a - 1] !== 10) { while (a < rd(NTIB) && m[b + a] !== 10) a++; wr(TOIN, a); } break;
+    case FIND:     push(find(pop())); break;      case NUMBER: push(number(pop())); break;
+    case SPFETCH:  a = SP; push(a); break;
+    case CMOVE:    a = pop(); b = pop(); d = pop(); while (a--) m[b++] = m[d++]; break;  // ( src dst n -- )
+    case ABORT:    abort(pop()); break;  // ( c-addr -- )
+  }
+}
+function run(xt) {  // machinery: run one word; return 0 = top level
+  IP = 0; W = xt; step(rd(W));
+  while (IP) { W = rd(IP); IP += 2; step(rd(W)); }  // NEXT
+}
+// ---- Bootstrap interpreter (machinery) ----
+function interpret() {
+  for (;;) {
+    const a = word(32); if (!m[a]) return;
+    const h = find(a);
+    if (h && (!rd(STATE) || m[h + 2] & 0x80)) run(cfa(h));  // interpreting, or immediate
+    else if (h) comma(cfa(h));
+    else if (rd(STATE)) { comma(xtLIT); comma(number(a)); }
+    else push(number(a));
+  }
+}
+// ---- Boot (machinery) ----
+function boot() {  // fresh memory, primitive headers
+  m = new Uint8Array(65536); SP = S0; RP = R0; out = '';
+  wr(DP, DICT); wr(BASE, 10);
+  load(NAMES);  // headers via our own WORD
+  for (let c = EXIT; c <= ABORT; c++) {
+    header(word(32)); comma(c);
+    if (c === SEMI || c === BACKSLASH) m[rd(LATEST) + 2] |= 0x80;  // immediate
+  }
+  load('LIT EXIT'); xtLIT = tick(); xtEXIT = tick();
+}
+</script>
+
+<!-- ================================================= -->
+<!-- FORTH ENDING                                      -->
+<!-- ================================================= -->
+
+<script>
+// ==== ADD-ON: inline JS, a host API. Delete it; the kernel never refers to it. ====
+// JS[ ... ]JS: a whole word = CODE, after DOES> = ;CODE, at the prompt it runs. API: push pop m emit.
+const INLINE = 64, JSOPEN = 65, fns = [], kStep = step, kBoot = boot; let xtINLINE;  // new code numbers
+boot = () => { kBoot(); fns.length = 0; load('(INLINE) JS[');  // add the two words
+  header(word(32)); xtINLINE = rd(DP); comma(INLINE); header(word(32)); comma(JSOPEN); m[rd(LATEST) + 2] |= 0x80; };
+step = c => { if (c === INLINE) { fns[rd(IP)](push, pop, m, emit); IP += 2; return; } if (c !== JSOPEN) return kStep(c);
+  let i = rd(TOIN), js = ''; const s = rd(SRC), e = rd(NTIB);  // JS[ : text up to ]JS
+  while (i < e && !(m[s + i] === 93 && m[s + i + 1] === 74 && m[s + i + 2] === 83)) js += String.fromCharCode(m[s + i++]);
+  wr(TOIN, i + 3); const f = new Function('push', 'pop', 'm', 'emit', js);
+  if (rd(STATE)) { fns.push(f); comma(xtINLINE); comma(fns.length - 1); } else f(push, pop, m, emit); };
+</script>
+<script>
+// ==== GUI (host): screen, 60 Hz VBLANK, console, editor ====
+const $ = id => document.getElementById(id), VBL = 14, SCR = 0xC000, SW = 128, SH = 96;
+const RGB = '000 ffe e43 f93 fd3 5c5 3cd 36e 95e f5b 124 334 889 bf6 8cf 853'.split(' ').map(h => [...h].map(d => parseInt(d, 16) * 17));
+let booted = false, paused = false, xtInterp = 0, steps = 0, ticks = 0, lastOut = null;
+const kernelStep = step; // watchdog
+step = c => { if (++steps > 4e6) throw 'WATCHDOG'; return kernelStep(c); };
+function guarded(fn) { // on error reset like ABORT
+  steps = 0;
+  try { fn(); return true; } catch (e) {
+    if (e === 'WATCHDOG') out += '\nStopped: endless loop?'; else if (e !== 0) out += '\nJS error: ' + (e.message || e);
+    SP = S0; RP = R0; wr(STATE, 0); wr(VBL, 0); return false;
+  }
+}
+function coldStart() { // CLEAR: fresh memory, core only
+  boot(); booted = true; load($('fs-core').textContent); guarded(interpret);
+  load('INTERPRET'); const h = find(word(32)); xtInterp = h ? cfa(h) : 0;
+}
+function runProgram() { // RUN: load the program on top of what is there
+  if (!booted) coldStart();
+  paused = false; load($('ed').value);
+  if (guarded(() => (xtInterp ? run(xtInterp) : interpret()))) out += 'ok\n';
+}
+function command(line) {
+  out += '> ' + line + '\n'; load(line);
+  const ok = guarded(() => (xtInterp ? run(xtInterp) : interpret())); out += ok ? ' ok\n' : '\n';
+}
+const sctx = $('scr').getContext('2d'), gctx = $('glow').getContext('2d'), img = sctx.createImageData(SW, SH);
+let last = 0, acc = 0, hzT = 0;
+function frame(now) { // 60 Hz
+  acc = Math.min(acc + now - last, 50); last = now;
+  while (booted && !paused && rd(VBL) && acc >= 1000 / 60) { acc -= 1000 / 60; const xt = rd(VBL); if (guarded(() => run(xt))) ticks++; }
+  if (now - hzT > 1000) { $('hz').textContent = (ticks ? ticks : '--') + ' Hz'; ticks = 0; hzT = now; }
+  for (let i = 0; i < SW * SH; i++) { img.data.set(RGB[m[SCR + i] & 15], i * 4); img.data[i * 4 + 3] = 255; }
+  sctx.putImageData(img, 0, 0); gctx.clearRect(0, 0, SW, SH); gctx.drawImage($('scr'), 0, 0);
+  if (out !== lastOut) { if (out.length > 8000) out = out.slice(-6000); $('con').textContent = lastOut = out; $('con').scrollTop = 1e9; }
+  requestAnimationFrame(frame);
+}
+$('ed').value = $('fs-demo').textContent.trim() + '\n';
+$('run').onclick = runProgram;
+$('stop').onclick = () => { paused = true; };
+$('clear').onclick = () => { coldStart(); out += 'Cleared: core only.\n'; };
+$('pf').onsubmit = e => { e.preventDefault(); if ($('cmd').value.trim()) command($('cmd').value); $('cmd').value = ''; };
+addEventListener('keydown', e => { if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') runProgram(); if (e.key === 'Escape') paused = true; });
+runProgram(); requestAnimationFrame(frame);
+</script>
+<script>
+// ==== ADD-ON: EXPLORE. Kind = code field (CODE COL DEF). Lineage and source are watched, never stored.
+(() => {
+const KC = { CODE: '#f39a2c', COL: '#3fd0d6', DEF: '#f15bb5' }, SPD = [1, 3, 10, 30, 100, 1000, 3000];
+const $ = id => document.getElementById(id), hx = n => (n & 65535).toString(16).toUpperCase().padStart(4, '0');
+const esc = s => String(s).replace(/[&<>]/g, c => '&#' + c.charCodeAt(0) + ';');
+const txt = (a, n) => String.fromCharCode(...m.subarray(a, a + n)), str = (a, n) => esc(txt(a, n)), nm = h => str(h + 3, m[h + 2] & 31);
+const hdr = a => { for (let h = rd(LATEST); h; h = rd(h)) if (h <= a) return h; return 0; };
+// code number -> its case line in step()
+const K = [...document.scripts].map(s => s.text).find(t => t.includes('function step(c)')) || '', ids = [];
+(K.match(/const DOCOL[^;]*/) || [''])[0].replace(/(\w+) = (\d+)/g, (_, k, v) => ids[v] = k);
+const code = c => { const i = K.indexOf('case ' + ids[c] + ':'); return i < 0 ? 'add-on #' + c : K.slice(i, K.indexOf('break;', i) + 6).replace(/\s+/g, ' '); };
+// creator at HEADER: a DEF whose DOES> code called CREATE, else the COL word that did
+const par = new Map(), src = new Map(), act = [], st0 = step, bt0 = boot; let c0 = 0;
+const line = () => { const t = txt(rd(SRC), rd(NTIB)), a = t.lastIndexOf('\n', rd(TOIN) - 2) + 1, e = t.indexOf('\n', a); return t.slice(a, e < 0 ? t.length : e).trim(); };
+boot = () => { par.clear(); src.clear(); act.length = 0; bt0(); };
+step = c => {
+  if (c === COLON) c0 = rd(TOIN) - 2;
+  if (c === SEMI) { const t = txt(rd(SRC), rd(NTIB)); src.set(rd(LATEST), t.slice(t.lastIndexOf(':', c0 + 1), rd(TOIN)).trim()); par.delete(rd(LATEST)); }
+  if (c === HEADER) {
+    while (act.length && act[act.length - 1].r < RP) act.pop();
+    const t = act[act.length - 1]; let by = t && t.r === RP + 2 ? t.h : RP < R0 ? hdr(rd(RP)) : 0;
+    if (by && nm(by) === 'INTERPRET') by = 0;
+    st0(c); by ? par.set(rd(LATEST), by) : par.delete(rd(LATEST)); src.set(rd(LATEST), line()); return;
+  }
+  const w = W, d = c === DOCREATE && rd(w + 2); st0(c); if (d) act.push({ h: hdr(w), r: RP });
+};
+document.head.insertAdjacentHTML('beforeend', `<style>#xp{max-width:1200px;margin:14px auto 0;background:#14141b;border-radius:16px;padding:12px;display:grid;gap:10px;font-size:12px;grid-template-columns:.7fr 1.2fr 1fr}
+#xp[hidden]{display:none}#xp div{display:grid;gap:6px;align-content:start;min-width:0}#xp pre{margin:0;background:#0d0e13;border-radius:8px;padding:6px;overflow:hidden auto;white-space:pre-wrap;max-height:220px}
+#xd{min-height:600px}#xd div{border-left:3px solid var(--k);padding-left:5px;display:block}.s{background:#2b2d3a}.h{background:var(--k);color:#000}.n{outline:1px solid var(--k)}
+.f{animation:f .8s}@keyframes f{from{transform:translateX(-14px);background:#f6d23a}}#xp i{font-style:normal;color:#5d6274}#xp b,#xp b *{background:#f6d23a;color:#000!important;font-weight:400}
+#xp u{background:#3fd0d6;color:#000;text-decoration:none}.two{grid-template-columns:1fr 1fr}@media(max-width:1000px){#xp,.two{grid-template-columns:1fr}#xd{min-height:0}}</style>`);
+const xp = document.createElement('section'); xp.id = 'xp'; xp.hidden = true;
+xp.innerHTML = `<div>DICTIONARY <i>fill = W, outline = IP</i><pre id="xd"></pre></div><div>WORD<pre id="xw"></pre>SOURCE<pre id="xc"></pre>INSIDE <i>yellow = IP</i><pre id="xs"></pre></div>
+<div>STEPPER <i>steps the line at OK&gt;</i>
+<div><button class="gh" id="x1">STEP</button> <button class="go" id="xg">PLAY</button> <button class="st" id="xq">STOP</button> <input type="range" id="xv" min="0" max="6" value="3" aria-label="Speed"> <span id="xn"></span></div>
+<pre id="xx"></pre><div class="two"><div>DATA STACK<pre id="xk"></pre></div><div>RETURN STACK<pre id="xr"></pre></div></div>INPUT BUFFER<pre id="xi"></pre></div>`;
+document.querySelector('.dev').after(xp);
+const tb = document.createElement('button'); tb.className = 'gh'; tb.textContent = 'EXPLORE'; $('stop').before(tb);
+let D = [], X = new Map(), H = new Map(), sel = 0, pin = 0, sig = '', tr = 0, pl = 0, cell = 0, nw = 0, ns = 0, old = 0, MD = { v: [], t: [] }, MR = { v: [], t: [] };
+function begin() {
+  const l = $('cmd').value.trim(); if (!xtInterp || !l) return;
+  paused = true; load(l); out += '> ' + l + '  (step)\n';
+  IP = 0; W = xtInterp; ns = pin = 0; tr = guarded(() => step(rd(W))) && IP;
+}
+function next() {
+  if (!tr) return begin();
+  cell = IP; W = nw = rd(IP); IP += 2; ns++;
+  if (!guarded(() => step(rd(W))) || !IP) { out += IP ? '\n' : ' ok\n'; tr = pl = 0; }
+}
+const own = a => H.get(hdr(a)), tg = w => w ? `<span data-h="${w.h}" style="color:${KC[w.k]}">${w.n}</span>` : '?';
+function scan() {
+  const hs = []; for (let h = rd(LATEST); h; h = rd(h)) hs.push(h); hs.reverse();
+  D = hs.map((h, i) => { const x = cfa(h), c = rd(x); return { h, x, e: hs[i + 1] || rd(DP), n: nm(h), im: m[h + 2] & 128, k: c === DOCOL ? 'COL' : c === DOCREATE ? 'DEF' : 'CODE' }; });
+  X = new Map(D.map(w => [w.x, w])); H = new Map(D.map(w => [w.h, w]));
+  $('xd').innerHTML = D.slice().reverse().map(w => `<div data-h="${w.h}" style="--k:${KC[w.k]}"${old && w.h > old ? ' class="f"' : ''}>${w.n}${w.im ? ' <i>IMM</i>' : ''} <i>${w.k}</i></div>`).join('');
+  old = rd(LATEST);
+}
+function see(a, e, L) { // decompile: the XT sequence
+  for (; a < e && L.length < 60;) {
+    const p = a, w = X.get(rd(a)), f = typeof fns != 'undefined' && fns[rd(a + 2)]; let s = w ? tg(w) : hx(rd(a)); a += 2;
+    if (w && w.n === 'LIT') s = s16(rd(a)), a += 2;
+    else if (w && /BRANCH/.test(w.n)) s += ' &rarr; ' + hx(rd(a)), a += 2;
+    else if (w && w.n === '(INLINE)') s = 'JS[ ' + esc(f ? (f + '').replace(/^[^{]*\{|\}$/g, '').trim() : rd(a)) + ' ]JS', a += 2;
+    else if (w && w.n === '(S")') s = '"' + str(a + 1, m[a]) + '"', a += m[a] + 1;
+    L.push(p === cell && tr ? `<b>${hx(p)} ${s}</b>` : `<i>${hx(p)}</i> ${s}`);
+  }
+  return L;
+}
+function stack(b, p, f, M) { // lit = changed in the last 0.6 s
+  const v = [], now = performance.now(); for (; p < b && v.length < 30; p += 2) v.push(rd(p));
+  const up = v.slice().reverse(); up.forEach((x, j) => { if (M.v[j] !== x) M.t[j] = now; }); M.v = up;
+  return v.map((x, i) => now - M.t[v.length - 1 - i] < 600 ? `<u>${f(x)}</u>` : f(x)).join('\n') || '<i>empty</i>';
+}
+function draw() {
+  if (xp.hidden || !m) return;
+  const s = [rd(LATEST), rd(DP), rd(cfa(rd(LATEST)) + 2), par.size] + '';
+  if (s !== sig) { scan(); sig = s; }
+  const inW = own(cell), hot = X.get(nw), sp = SPD[$('xv').value];
+  if (tr && !pin && inW) sel = inW.h;
+  if (!H.has(sel)) sel = rd(LATEST);
+  for (const d of $('xd').children) { const h = +d.dataset.h, t = (k, v) => d.classList.toggle(k, !!v); t('s', h === sel); t('h', tr && hot && h === hot.h); t('n', tr && inW && h === inW.h); }
+  if (tr && sp <= 30 && hot) $('xd').querySelector(`[data-h="${hot.h}"]`)?.scrollIntoView({ block: 'nearest' });
+  const w = H.get(sel), c = rd(w.x), da = w.k === 'DEF' && rd(w.x + 2), ch = [w];
+  for (let h = w.h; par.has(h) && H.has(par.get(h)) && ch.length < 12;) ch.unshift(H.get(h = par.get(h)));
+  $('xw').innerHTML = `${tg(w)} ${w.k}${w.im ? ' IMM' : ''}\nLFA ${hx(w.h)} &rarr; ${rd(w.h) ? tg(H.get(rd(w.h))) : 'none'}\nNFA ${hx(w.h + 2)} ${m[w.h + 2] & 31}\n` +
+    `CFA=XT ${hx(w.x)} holds ${ids[c] || '#' + c}: <i>${esc(code(c))}</i>\nPFA ${hx(w.x + 2)}` +
+    (w.k === 'DEF' ? ` DOES&gt; cell ${da ? hx(da) + ' in ' + tg(own(da)) : '0'}\nmade by ${ch.length > 1 ? ch.map(tg).join(' &rsaquo; ') : 'typed'}` : '');
+  $('xc').innerHTML = w.k === 'CODE' ? '<i>see CFA</i>' : esc(src.get(w.h) || '?');
+  const L = w.k === 'COL' ? see(w.x + 2, w.e, []) : w.k === 'CODE' ? [esc(code(c))] : [];
+  if (w.k === 'DEF') { for (let a = w.x + 4; a < w.e && L.length < 6; a += 2) L.push('<i>' + hx(a) + '</i> data ' + s16(rd(a)));
+    if (da) L.push('<i>DOES&gt; code:</i>', ...see(da, own(da) ? own(da).e : da + 40, []).slice(0, 20)); }
+  $('xs').innerHTML = L.join('\n'); $('xs').querySelector('b')?.scrollIntoView({ block: 'nearest' });
+  $('xx').innerHTML = tr && hot ? `NEXT: IP ${hx(cell)} in ${tg(inW)} &rarr; XT ${hx(nw)} = ${tg(hot)} &rarr; ${ids[rd(nw)] || '#' + rd(nw)}` : '<i>NEXT: IP &rarr; XT &rarr; code</i>';
+  $('xk').innerHTML = stack(S0, SP, v => `${s16(v)} <i>$${hx(v)}</i> ${v > 32 && v < 127 ? esc(String.fromCharCode(v)) : ''}`, MD);
+  $('xr').innerHTML = stack(R0, RP, v => v ? 'into ' + tg(own(v)) : 'top level', MR);
+  const sr = rd(SRC), n = rd(NTIB), at = Math.min(rd(TOIN), n), lo = Math.max(0, at - 200);
+  $('xi').innerHTML = `<i>${str(sr + lo, at - lo)}</i><b>&#9656;</b>${str(sr + at, Math.min(n - at, 150))}\n<i>HERE ${hx(rd(DP))} STATE ${rd(STATE)}</i>`;
+  $('xn').textContent = sp + '/s ' + ns; $('xg').textContent = pl ? 'PAUSE' : 'PLAY';
+}
+let acc = 0, lt = 0, ld = 0;
+(function loop(t) {
+  const dt = Math.min(t - lt, 100); lt = t;
+  if (pl) for (acc += dt * SPD[$('xv').value] / 1000; acc >= 1 && pl; acc--) next();
+  if (pl || t - ld > 250) { draw(); ld = t; }
+  requestAnimationFrame(loop);
+})(0);
+tb.onclick = () => { $('cmd').value ||= ': MAKER CREATE , DOES> CREATE @ , DOES> @ 100 + ; 7 MAKER FAMILY FAMILY KID KID .'; xp.hidden = !xp.hidden; tb.textContent = xp.hidden ? 'EXPLORE' : 'CLOSE'; sig = ''; draw(); };
+xp.onclick = e => { const d = e.target.closest('[data-h]'); if (d) { sel = +d.dataset.h; pin = 1; draw(); } };
+$('x1').onclick = () => { pl = 0; next(); draw(); };
+$('xg').onclick = () => { if (!tr) begin(); pl = tr && !pl; draw(); };
+$('xq').onclick = () => { tr = pl = 0; IP = 0; RP = R0; draw(); };
+['run', 'clear'].forEach(b => $(b).addEventListener('click', () => { tr = pl = 0; sig = ''; }));
+coldStart(); runProgram();
+})();
+</script>

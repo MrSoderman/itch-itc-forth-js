@@ -1,0 +1,1347 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width">
+<title>ITCH Forth Base</title>
+<style>
+  body { font: 14px monospace; background: #111; color: #0ff; padding: 16px; margin: 0; }
+  /* one column, exactly as wide as the screen ( the host sets --w ) */
+  #machine { width: var(--w, 642px); max-width: 100%; }
+  #tabs { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+  .tab { padding: 2px 10px; }  .tab.on { background: #0ff; color: #000; }
+  #meter { font-size: 11px; color: #088; margin-left: auto; white-space: nowrap; overflow: hidden; }
+  .bar { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin: 10px 0; }
+  .bar > * { width: 100%; height: 34px; display: flex; align-items: center; justify-content: center; overflow: hidden; white-space: nowrap; }
+  @media (max-width: 520px) { .bar > *, .tab { letter-spacing: 0; font-size: 12px; padding: 0 4px; } #meter { display: none; } }
+  /* retro keys: a frame and a hard shadow that presses in */
+  button, .btn, select { box-sizing: border-box; font: inherit; text-transform: uppercase; letter-spacing: 1px; margin: 0;
+    background: #000; color: #0ff; border: 2px solid #0ff; box-shadow: 3px 3px 0 #077; padding: 4px 6px; cursor: pointer; }
+  button:hover, .btn:hover, select:hover { background: #0ff; color: #000; }
+  button:active, .btn:active { transform: translate(2px, 2px); box-shadow: 1px 1px 0 #077; }
+  /* the monitor: sized by the host to a whole multiple of 320x200 in device pixels ( see fit ); nothing of
+     the browser on it: no selection, callout, highlight or scrolling */
+  #monitor { position: relative; line-height: 0; touch-action: none; user-select: none; -webkit-user-select: none;
+    -webkit-touch-callout: none; -webkit-tap-highlight-color: transparent; overscroll-behavior: contain; }
+  #scr { display: block; border: 1px solid #0ff; image-rendering: pixelated; outline: 0; touch-action: none; -webkit-user-drag: none; }
+  #scr:focus { border-color: #ff0; }                  /* yellow: the keys go to the game */
+  /* the log: plain web text over the screen, in every language; it can be selected and copied */
+  #log { position: absolute; inset: 0; margin: 0; padding: 8px 10px; overflow-y: auto; box-sizing: border-box; border: 1px solid #0ff;
+    background: #000; color: #cfe; font: 13px/1.45 ui-monospace, Menlo, Consolas, monospace; white-space: pre-wrap; word-break: break-word;
+    user-select: text; -webkit-user-select: text; touch-action: pan-y; }
+  #src { width: 100%; box-sizing: border-box; height: 30vh; min-height: 4em; resize: vertical; padding: 8px;
+    background: #000; color: #0ff; border: 1px solid #0ff; white-space: pre-wrap; overflow-x: hidden; }
+  #kbd { position: fixed; left: 0; bottom: 0; width: 1px; height: 1px; padding: 0; border: 0; opacity: 0; font-size: 16px; resize: none; }
+</style>
+</head>
+<body>
+<div id="machine">
+<div id="tabs"><button class="tab" data-view="text" title="the text screen on black; keys to the prompt; the wheel or a drag scrolls back">Text</button><button class="tab" data-view="mix" title="the text over the dimmed picture; keys to the prompt">Mix</button><button class="tab" data-view="picture" title="the picture alone; keys to the game">Picture</button><button class="tab" data-view="code" title="the program box on the screen: edit it here or below">Code</button><button class="tab" data-view="log" title="everything printed, as web text in every language; select and copy; keys to the prompt">Log</button><span id="meter"></span></div>
+<div id="monitor"><canvas id="scr" width="320" height="200" tabindex="0"></canvas><pre id="log" hidden></pre><pre id="out" hidden></pre></div>
+<div class="bar"><button onclick="go(srcEl.value)">Run</button>
+<label class="btn" title="load .fs program files ( or drop them on the page )">Load .fs<input type="file" id="fs" accept=".fs,.txt" multiple hidden></label>
+<button onclick="save_fs()" title="save the program box as a .fs file">Save .fs</button></div>
+<div class="bar"><select id="demo" title="the programs you loaded: choose one to run it">
+<option value="hello">hello: the smallest program</option></select>
+<button onclick="save_rom()" title="save the grown system as a ROM image">Save ROM</button>
+<label class="btn" title="power on from a ROM image: no seed, no source">Boot ROM<input type="file" id="rom" accept=".rom" hidden></label></div>
+<textarea id="src" spellcheck="false" aria-label="Forth source">\ ITCH Forth base, compact edition: same code as the commented edition, comments removed.
+7 COLOUR ! .( HELLO WORLD!) 13 COLOUR ! CR
+</textarea>
+</div>
+<textarea id="kbd" aria-label="type to the prompt" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"></textarea>
+<!-- ==== DEMOS: programs, not part of the system. The menu puts one in the program box. ==== -->
+<!-- ==== BOOT: the language, written in itself ( needs only the machine ) ==== -->
+<!-- ======== PART 1: ITCH, the machine: its Forth ( the blocks below ), the KERNEL ( the CPU ), the VIDEO CHIP
+     and the BOARD ( the other devices ). It never refers to the GUI. ======== -->
+<script type="text/forth" id="boot">
+: DP 0 ;
+: LATEST 2 ;
+: >IN 4 ;
+: #TIB 6 ;
+: BASE 8 ;
+: SRC 10 ;
+: ME 14 ;
+: ERROR ME @ 4 + ;
+: S0 ME @ 6 + ;
+: R0 ME @ 8 + ;
+: TIB 30720 ;
+: DOCOL 0 ;
+: BL 32 ;
+: HERE DP @ ;
+: ALLOT HERE + DP ! ;
+: , HERE ! 2 ALLOT ;
+: LIT, LIT LIT , , ;
+: >CFA DUP 2 + C@ 31 AND + 3 + ;
+: ' BL WORD FIND >CFA ;
+: SET LATEST @ 2 + DUP >R C@ OR R> C! ;
+: BUILDER 64 SET ;
+: BOTH 128 SET ;
+: INSIDE 192 SET ;
+: IMMEDIATE BOTH ;
+: ['] ' LIT, ; BUILDER
+: ( 41 WORD DROP ; BOTH
+: NIP SWAP DROP ;
+: 2DUP OVER OVER ;
+: 1+ 1 + ;
+: 1- 1 - ;
+: +! SWAP OVER @ + SWAP ! ;
+: R@ R> R> DUP >R SWAP >R ; INSIDE
+: ROT >R SWAP R> SWAP ;
+: NEGATE 0 SWAP - ;
+: CROSSED 12 ;
+: KIND? - CROSSED @ OR CROSSED ! ;
+: IF ['] 0BRANCH , HERE 0 , 1 ; BUILDER
+: THEN 1 KIND? HERE SWAP ! ; BUILDER
+: ELSE 1 KIND? ['] BRANCH , HERE 0 , SWAP HERE SWAP ! 1 ; BUILDER
+: BEGIN HERE 2 ; BUILDER
+: UNTIL 2 KIND? ['] 0BRANCH , , ; BUILDER
+: AGAIN 2 KIND? ['] BRANCH , , ; BUILDER
+: WHILE 2 KIND? ['] 0BRANCH , HERE 0 , 1 ROT 2 ; BUILDER
+: REPEAT 2 KIND? ['] BRANCH , , 1 KIND? HERE SWAP ! ; BUILDER
+: 0= IF 0 ELSE -1 THEN ;
+: = - 0= ;
+: ?DUP DUP IF DUP THEN ;
+: > SWAP < ;
+: MAX 2DUP < IF SWAP THEN DROP ;
+: MIN 2DUP > IF SWAP THEN DROP ;
+: ABS DUP 0 < IF NEGATE THEN ;
+: INVERT -1 SWAP - ;
+: XOR 2DUP OR >R AND R> SWAP - ;
+: /MOD OVER 0 < >R DUP 0 < >R ABS SWAP ABS SWAP U/MOD
+ R> R@ = 0= IF NEGATE THEN SWAP R> IF NEGATE THEN SWAP ;
+: MOD /MOD DROP ;
+: / /MOD NIP ;
+: CMOVE BEGIN ?DUP WHILE >R OVER C@ OVER C! 1+ SWAP 1+ SWAP R> 1- REPEAT DROP DROP ;
+: CR 10 EMIT ;
+: U. BASE @ U/MOD ?DUP IF U. THEN DUP 9 SWAP < IF 7 + THEN 48 + EMIT ;
+: . DUP 0 < IF 45 EMIT 0 SWAP - THEN U. 32 EMIT ;
+: HEX 16 BASE ! ;
+: DECIMAL 10 BASE ! ;
+: COUNT DUP 1+ SWAP C@ ;
+: TYPE ?DUP IF BEGIN OVER C@ EMIT 1- SWAP 1+ SWAP DUP 0= UNTIL DROP THEN DROP ;
+: (S") R> COUNT 2DUP + >R ;
+: STRING, ['] (S") , DUP C@ 1+ HERE SWAP DUP ALLOT CMOVE ;
+: S"       ( " text" -- ) 34 WORD STRING, ; BUILDER
+: .(       ( "text" -- ) 41 WORD COUNT TYPE ; BOTH
+: HEADER DUP DUP C@ 31 MIN SWAP C!
+ DUP FIND IF DUP COUNT TYPE S"  covers an older one " TYPE THEN
+ HERE LATEST @ , SWAP DUP C@ 1+ HERE SWAP DUP ALLOT CMOVE LATEST ! ;
+: BORN? DUP 2 + @ ['] LIT = SWAP DUP 4 + @ SWAP 12 + = AND ;
+: (PARENT) RP@ BEGIN DUP R0 @ < WHILE
+ DUP @ 8 - DUP 4 + @ OVER 12 + = OVER 2 + @ ['] LIT = AND IF NIP EXIT THEN
+ 2 + DUP @ ['] LIT = IF DUP 2 + @ 12 - DUP BORN? IF
+ DUP 6 + @ >R OVER 4 + @ R> = IF NIP NIP EXIT THEN THEN DROP THEN DROP
+ 2 + REPEAT DROP 0 ;
+: BELOW BEGIN 2DUP < WHILE @ REPEAT NIP ;
+: (OWNER1) LATEST @ BELOW DUP IF >CFA THEN ;
+: OWNER (OWNER1) ;
+: CREATE BL WORD HEADER DOCOL , ['] LIT , HERE 8 + , ['] EXIT , ['] EXIT ,
+ (PARENT) ?DUP 0= IF R@ OWNER THEN , ;
+: PARENT 10 + @ ;
+: (DOES>) R> LATEST @ >CFA 6 + ! ;
+: DOES> ['] (DOES>) , DOCOL , ; BUILDER
+: CONSTANT CREATE , DOES> @ ;
+: VARIABLE CREATE 0 , ;
+: NOT-SET 63 EMIT ;
+: DEFER CREATE ['] NOT-SET , DOES> @ EXECUTE ;
+: >IS DUP 10 + @ ['] DEFER = IF 12 + EXIT THEN
+ DROP 1024 COUNT TYPE S"  is not a DEFER " TYPE ERROR @ EXECUTE ;
+: 2* DUP + ;
+: 2/ 2 U/MOD NIP ;
+: LSHIFT BEGIN ?DUP WHILE >R 2* R> 1- REPEAT ;
+: RSHIFT BEGIN ?DUP WHILE >R 2/ R> 1- REPEAT ;
+VARIABLE SEED 1 SEED !
+: RND SEED @ 31421 * 6927 + DUP SEED ! 256 U/MOD NIP SWAP MOD ;
+: NOOP ;
+: INLINE, DUP BORN? 0= IF , EXIT THEN DUP 4 + @ LIT, 6 + @ DUP ['] EXIT = IF DROP ELSE , THEN ;
+CREATE T-WORD ' EXECUTE , ' INLINE, ,
+: (INSIDE) DROP 1024 COUNT TYPE S"  only inside a definition " TYPE ERROR @ EXECUTE ;
+CREATE T-INSIDE ' (INSIDE) , ' , ,
+CREATE T-BUILDER ' (INSIDE) , ' EXECUTE ,
+CREATE T-BOTH ' EXECUTE , ' EXECUTE ,
+CREATE T-NUM ' NOOP , ' LIT, ,
+CREATE TYPES T-WORD , T-BUILDER , T-BOTH , T-INSIDE ,
+: REC-WORD
+ DUP FIND ?DUP IF NIP DUP >CFA SWAP 2 + C@ 64 /MOD NIP 2 * TYPES + @ ELSE 0 THEN ;
+: REC-NUM NUMBER T-NUM ;
+VARIABLE GROWING VARIABLE VOCS
+: (VOC)
+ DUP GROWING @ = IF DROP 0 EXIT THEN
+ LATEST @ >R @ LATEST ! REC-WORD R> LATEST ! ;
+: VOCABULARY CREATE HERE 0 , 0 , VOCS @ , DUP VOCS !
+ HERE DOCOL , ['] LIT , OVER , ['] (VOC) , ['] EXIT , SWAP 2 + ! ;
+VOCABULARY TRUNK TRUNK GROWING !
+: (OWNER) DUP LATEST @ BELOW VOCS @ BEGIN ?DUP WHILE
+ >R OVER R@ @ BELOW MAX R> 4 + @ REPEAT NIP DUP IF >CFA THEN ;
+' (OWNER) ' OWNER 2 + !
+11 CONSTANT ROOM
+CREATE RECS 3 , ' REC-NUM , TRUNK 2 + @ , ' REC-WORD , 16 ALLOT
+: +REC RECS @ ROOM = IF S" no room for a receptor " TYPE ERROR @ EXECUTE THEN
+ RECS @ 1+ DUP RECS ! 2 * RECS + ! ;
+: -REC RECS @ 1- RECS ! ;
+CREATE SBUF 82 ALLOT
+CREATE T-STR ' COUNT , ' STRING, ,
+: SAY, STRING, ['] TYPE , ;
+: (SAY) COUNT TYPE ;
+CREATE T-SAY ' (SAY) , ' SAY, ,
+: REC-STR
+ DUP C@ 2 = OVER 2 + C@ 34 = AND OVER 1+ C@ DUP 83 = SWAP 46 = OR AND 0= IF 0 EXIT THEN
+ 1+ C@ >R 34 WORD DUP C@ 81 MIN SWAP OVER SBUF C! 1+ SBUF 1+ ROT CMOVE
+ SBUF R> 83 = IF T-STR ELSE T-SAY THEN ;
+' REC-STR +REC
+: RECOGNIZE RECS @ >R
+ BEGIN R> DUP >R 2 * RECS + @ EXECUTE ?DUP 0= WHILE R> 1- >R REPEAT R> DROP ;
+: SLOT 2 * RECS + ;
+: REC# RECS @ BEGIN DUP WHILE 2DUP SLOT @ = IF NIP EXIT THEN 1- REPEAT NIP ;
+: EXPRESS 2 + @ RECS @ ROOM = IF S" no room for a receptor " TYPE ERROR @ EXECUTE THEN
+ ['] REC-WORD REC# RECS @ BEGIN 2DUP SWAP < 0= WHILE DUP SLOT @ OVER 1+ SLOT ! 1- REPEAT DROP
+ SLOT ! 1 RECS +! ;
+: UNREC SLOT DUP 2 + SWAP RECS @ SLOT OVER - CMOVE -1 RECS +! ;
+: SILENCE DUP TRUNK = IF DROP EXIT THEN
+ 2 + @ RECS @ BEGIN ?DUP WHILE 2DUP SLOT @ = IF DUP UNREC THEN 1- REPEAT DROP ;
+: ' BL WORD RECOGNIZE DUP T-NUM = OVER T-STR = OR
+ IF DROP DROP 1024 COUNT TYPE S"  is not a word " TYPE ERROR @ EXECUTE THEN DROP ;
+: ['] ' LIT, ; BUILDER
+: IS ' >IS ! ;
+: [IS] ' >IS LIT, ['] ! , ; BUILDER
+: INTERPRET BEGIN BL WORD DUP C@ WHILE RECOGNIZE @ EXECUTE REPEAT DROP ;
+: ] BEGIN BL WORD DUP C@ WHILE RECOGNIZE 2 + @ EXECUTE REPEAT DROP ;
+: [ R> DROP ; BUILDER
+: NAMED BL WORD DUP C@ 0= IF S" a name is needed " TYPE ERROR @ EXECUTE THEN
+ HEADER ;
+CREATE CSP 6 ALLOT
+: !CSP SP@ CSP ! HERE CSP 2 + ! LATEST @ CSP 4 + ! 0 CROSSED ! ;
+: UNMAKE CSP 2 + @ ?DUP IF DP ! CSP 4 + @ LATEST ! 0 CSP 2 + ! THEN ;
+: ?CSP SP@ CSP @ = CROSSED @ 0= AND IF 0 CSP 2 + ! EXIT THEN UNMAKE
+ S" unfinished or crossed IF, BEGIN or CASE: the word is not made " TYPE ERROR @ EXECUTE ;
+: : ( "name" -- ) !CSP NAMED DOCOL , ] ;
+: GROWS CSP 2 + @ IF DROP S" GROWS only between definitions " TYPE ERROR @ EXECUTE THEN
+ LATEST @ GROWING @ ! DUP GROWING ! @ LATEST ! ;
+NAMED ; DOCOL , ' ?CSP , ' LIT , ' EXIT , ' , , ' R> , ' DROP , ' EXIT , BUILDER
+INTERPRET
+</script>
+<!-- ==== LIFE: growth and pruning, membranes, tasks, the prompt ( needs BOOT ) ==== -->
+<script type="text/forth" id="life">
+: LITERAL LIT, ; BUILDER
+: POSTPONE BL WORD RECOGNIZE SWAP LIT, 2 + @ , ; BUILDER
+: COMPILE R> DUP 2 + >R @ , ;
+: CASE 0 ; BUILDER
+: OF POSTPONE OVER POSTPONE = POSTPONE IF POSTPONE DROP ; BUILDER
+: ENDOF POSTPONE ELSE ROT 1+ ; BUILDER
+: ENDCASE POSTPONE DROP BEGIN ?DUP WHILE ROT ROT POSTPONE THEN 1- REPEAT ; BUILDER
+: -IF POSTPONE DUP 0 LIT, POSTPONE < POSTPONE IF ; BUILDER
+: EVALUATE
+ SRC @ >R #TIB @ >R >IN @ >R
+ #TIB ! SRC ! 0 >IN ! INTERPRET
+ R> >IN ! R> #TIB ! R> SRC ! ;
+: :NONAME HERE !CSP DOCOL , ] ;
+: .S SP@ S0 @ OVER - 2 /MOD NIP 60 EMIT U. 62 EMIT 32 EMIT
+ S0 @ BEGIN 2 - 2DUP SWAP < 0= WHILE DUP @ . REPEAT DROP DROP ;
+: FILL SWAP BEGIN ?DUP WHILE >R 2DUP SWAP C! SWAP 1+ SWAP R> 1- REPEAT DROP DROP ;
+: ERASE 0 FILL ;
+: /STRING ROT OVER + ROT ROT - ;
+: WORDS LATEST @ BEGIN ?DUP WHILE DUP 2 + COUNT 31 AND TYPE 32 EMIT @ REPEAT ;
+DEFER PRUNE ' DROP IS PRUNE
+: TRIM BEGIN 2DUP @ SWAP < 0= OVER @ AND WHILE DUP @ @ OVER ! REPEAT DROP ;
+: TRIM-GROUPS BEGIN VOCS @ DUP IF OVER < 0= THEN WHILE VOCS @ 4 + @ VOCS ! REPEAT
+ VOCS @ BEGIN ?DUP WHILE DUP >R TRIM R> 4 + @ REPEAT ;
+: MARKER HERE LATEST @ GROWING @ CREATE , , , RECS HERE 24 CMOVE 24 ALLOT
+ DOES> LATEST @ GROWING @ ! DUP @ GROWING ! 2 + DUP @ LATEST ! 2 + DUP @ >R
+ 2 + RECS 24 CMOVE R> TRIM-GROUPS DUP PRUNE DP ! ;
+VOCABULARY SEALED
+: MEMBRANE LATEST @ ;
+: SURFACE LATEST @ ;
+: SEAL 2DUP = IF DROP DROP EXIT THEN SWAP >R >R
+ LATEST BEGIN DUP @ DUP R@ = SWAP 0= OR 0= WHILE @ REPEAT
+ DUP @ 0= IF R> R> DROP DROP DROP S" SEAL without its SURFACE " TYPE ERROR @ EXECUTE THEN
+ R> R@ ROT !
+ DUP BEGIN DUP @ R@ = 0= WHILE @ REPEAT
+ SEALED @ SWAP ! SEALED ! R> DROP ;
+VARIABLE BUSY VARIABLE NEW
+: SWITCH RP@ SP@ ME @ 2 + ! ME @ @ DUP ME ! 2 + @ SP! RP! ;
+: PAUSE -1 BUSY ! SWITCH ;
+: TAKE BEGIN DUP @ ?DUP 0= WHILE SWITCH REPEAT SWAP 0 SWAP ! ;
+: SEND BEGIN DUP @ WHILE SWITCH REPEAT ! ;
+: SIGNAL DUP @ IF DROP DROP ELSE ! THEN ;
+: ?TAKE DUP @ 0 ROT ! ;
+: STOP BEGIN SWITCH AGAIN ;
+: AT NEW @ + ;
+: TASK CREATE HERE NEW ! 138 ALLOT
+ 2 + 134 AT ! ['] STOP 2 + 136 AT ! 134 AT 72 AT ! 72 AT 2 AT !
+ ['] STOP 4 AT ! 74 AT 6 AT ! 138 AT 8 AT ! ME @ @ 0 AT ! NEW @ ME @ ! ;
+ME @ ME @ !
+: CUT-TASKS NEW ! 256 @ BEGIN DUP NEW @ < 0= WHILE @ REPEAT 256 ! ;
+' CUT-TASKS IS PRUNE
+: KEY-HEAD 55296 ; : KEY-TAIL 55297 ; : KEY-RING 55552 ;
+: CURSOR 55314 ;
+: KEY? KEY-HEAD C@ KEY-TAIL C@ = 0= ;
+: KEY BEGIN KEY? 0= WHILE SWITCH REPEAT
+ KEY-HEAD C@ DUP KEY-RING + C@ SWAP 1+ KEY-HEAD C! ;
+: KEYS BEGIN ?DUP WHILE >R DUP C@ KEY-TAIL C@ KEY-RING + C!
+ KEY-TAIL C@ 1+ KEY-TAIL C! 1+ R> 1- REPEAT DROP ;
+: RUB BEGIN DUP WHILE 1- 8 EMIT 2DUP + C@ 192 AND 128 = 0= UNTIL THEN ;
+: ACCEPT 0 BEGIN KEY
+ DUP 13 = IF DROP NIP EXIT THEN
+ DUP 8 = IF DROP RUB ELSE DUP EMIT >R 2DUP + R> SWAP C! 1+ THEN AGAIN ;
+: QUIT R0 @ RP!
+ BEGIN TIB DUP ACCEPT #TIB ! SRC ! 0 >IN ! CR INTERPRET
+ CSP 2 + @ IF UNMAKE S" unfinished: a definition at the prompt fits on one line " TYPE THEN
+ CURSOR C@ IF CR THEN S" ok" TYPE CR AGAIN ;
+: ABORT UNMAKE S0 @ SP! CR QUIT ;
+' ABORT ERROR !
+: IDLE BEGIN BUSY @ 0= IF SLEEP THEN 0 BUSY ! SWITCH AGAIN ;
+' IDLE TASK IDLER
+: 0< 0 < ; : 0> 0 > ; : 0<> 0= 0= ;
+: <> = 0= ; : <= > 0= ; : >= < 0= ;
+: U< 2DUP XOR 0< IF NIP 0< ELSE - 0< THEN ;
+: U> SWAP U< ;
+: WITHIN OVER - >R - R> U< ;
+: 2DROP DROP DROP ; : -ROT ROT ROT ;
+: TUCK SWAP OVER ; : 2SWAP ROT >R ROT R> ;
+: PICK 1+ 2 * SP@ + @ ;
+: 2OVER 3 PICK 3 PICK ;
+: ROLL DUP IF SWAP >R 1- ROLL R> SWAP ELSE DROP THEN ;
+: DEPTH SP@ S0 @ SWAP - 2 / ;
+: CELL 2 ; : CELLS 2* ; : >BODY 12 + ;
+: C, HERE C! 1 ALLOT ;
+: PAD HERE 80 + ;
+: CMOVE> BEGIN ?DUP WHILE 1- >R OVER R@ + C@ OVER R@ + C! R> REPEAT DROP DROP ;
+: MOVE >R 2DUP U< IF R> CMOVE> ELSE R> CMOVE THEN ;
+: SPACE 32 EMIT ; : SPACES 0 MAX BEGIN ?DUP WHILE SPACE 1- REPEAT ;
+: PAGE 12 EMIT ;
+: SOURCE SRC @ #TIB @ ; : PARSE WORD COUNT ;
+: S= ROT OVER = 0= IF DROP DROP DROP 0 EXIT THEN
+ BEGIN ?DUP WHILE >R OVER C@ OVER C@ = 0= IF R> DROP DROP DROP 0 EXIT THEN
+ 1+ SWAP 1+ SWAP R> 1- REPEAT DROP DROP -1 ;
+: ABORT" POSTPONE IF 34 WORD STRING, ['] TYPE , ['] ABORT , POSTPONE THEN ; BUILDER
+: [COMPILE] ' , ; BUILDER
+: RECURSE LATEST @ >CFA , ; BUILDER
+: VALUE CREATE , DOES> @ ;
+: TO ' >BODY ! ; : [TO] ' >BODY LIT, ['] ! , ; BUILDER
+: FOR POSTPONE >R POSTPONE BEGIN ; BUILDER
+: NEXT POSTPONE R> POSTPONE 1- POSTPONE DUP POSTPONE >R POSTPONE 0<
+ POSTPONE UNTIL POSTPONE R> POSTPONE DROP ; BUILDER
+MEMBRANE VARIABLE AREG SURFACE
+: A! AREG ! ; : A@ AREG @ ;
+: @+ AREG @ @ 2 AREG +! ; : !+ AREG @ ! 2 AREG +! ;
+: C@+ AREG @ C@ 1 AREG +! ; : C!+ AREG @ C! 1 AREG +! ;
+SEAL
+</script>
+<!-- ==== CHIPS: the devices' registers ( needs BOOT ) ==== -->
+<script type="text/forth" id="chips">
+: FRAMES 55298 ;
+: VBL 55300 ;
+: TICKERS 55302 ;
+: RUN-MS 55304 ;
+: KEY-HELD 55424 ;
+: KEY-DOWN? 127 AND KEY-HELD + C@ 0= 0= ;
+10 CONSTANT POINTS
+: TOUCH 12 * 65280 + ;
+: POINTER TOUCH DUP @ SWAP 2 + @ ;
+: BUTTONS TOUCH 4 + C@ ;
+: PRESSED? BUTTONS 0= 0= ;
+: PRESSURE TOUCH 5 + C@ ;
+: PRESSES TOUCH 10 + ;
+: DEVICE TOUCH 11 + C@ ;
+: WHEEL 65400 ;
+MEMBRANE
+: S8 DUP 127 > IF 256 - THEN ;
+SURFACE
+: TILT TOUCH 6 + DUP C@ S8 SWAP 1+ C@ S8 ;
+: TWIST TOUCH 8 + @ ;
+SEAL
+MEMBRANE
+CREATE SEEN 82 ALLOT CREATE PRIOR 82 ALLOT CREATE LAST-PRESS 20 ALLOT CREATE TWICE 20 ALLOT
+SEEN 82 ERASE PRIOR 82 ERASE LAST-PRESS 20 ERASE TWICE 20 ERASE
+: SPOT SWAP 8 * + ;
+: TAKE-IN DUP >R SEEN SPOT R@ PRESSES C@ OVER ! R@ BUTTONS OVER 2 + !
+ R> POINTER ROT 4 + DUP >R 2 + ! R> ! ;
+SURFACE
+: CLICKED? DUP SEEN SPOT @ SWAP PRIOR SPOT @ <> ;
+: RELEASED? DUP SEEN SPOT 2 + @ 0= SWAP DUP PRIOR SPOT 2 + @ 0= 0= SWAP CLICKED? OR AND ;
+: DOUBLE? 2 * TWICE + @ ;
+: MOVED DUP SEEN SPOT 4 + DUP @ SWAP 2 + @ ROT PRIOR SPOT 4 + DUP @ SWAP 2 + @
+ ROT SWAP - >R - R> ;
+: RIGHT? BUTTONS 2 AND 0= 0= ;
+: MIDDLE? BUTTONS 4 AND 0= 0= ;
+: WHEEL-STEPS SEEN 80 + @ PRIOR 80 + @ - ;
+: FEEL SEEN PRIOR 82 CMOVE POINTS 0 BEGIN 2DUP > WHILE DUP TAKE-IN
+ DUP CLICKED? IF DUP 2 * LAST-PRESS + DUP @ FRAMES @ SWAP - 20 U< SWAP FRAMES @ SWAP ! ELSE 0 THEN
+ OVER 2 * TWICE + ! 1+ REPEAT 2DROP WHEEL @ SEEN 80 + ! ;
+SEAL
+: VOICES 55360 ;
+: SCOPE 55808 ;
+: VOICE 8 * VOICES + ;
+: TONE VOICE >R R@ 3 + C! R@ 2 + C! R> ! ;
+: QUIET 0 SWAP VOICE 3 + C! ;
+: SECONDS 55344 ; : MINUTES 55345 ; : HOURS 55346 ;
+: DAY 55347 ; : MONTH 55348 ; : YEAR 55350 ;
+: TIME&DATE
+ SECONDS C@ MINUTES C@ HOURS C@ DAY C@ MONTH C@ YEAR @ ;
+: NOW SECONDS C@ HOURS C@ 60 * MINUTES C@ + ;
+</script>
+<!-- ==== TOOLS: look inside words ( needs BOOT ); remove to drop them ==== -->
+<script type="text/forth" id="tools">
+VARIABLE FAR VARIABLE WHO
+: >NAME-IN BEGIN DUP WHILE 2DUP >CFA = IF NIP EXIT THEN @ REPEAT NIP ;
+: >NAME DUP LATEST @ >NAME-IN ?DUP IF NIP EXIT THEN
+ VOCS @ BEGIN ?DUP WHILE 2DUP @ >NAME-IN ?DUP IF NIP NIP EXIT THEN 4 + @ REPEAT DROP 0 ;
+: .NAME ?DUP 0= IF 45 EMIT 32 EMIT EXIT THEN
+ DUP >NAME ?DUP IF NIP 2 + COUNT 31 AND TYPE 32 EMIT ELSE . THEN ;
+: CREATED? DUP 2 + @ ['] LIT = SWAP DUP 4 + @ SWAP 12 + = AND ;
+: SEE1
+ DUP ['] LIT = IF DROP DUP @ 12 - DUP CREATED? IF
+ DUP .NAME 6 + @ DUP ['] EXIT = IF DROP ELSE OVER 2 + @ = IF 2 + THEN THEN
+ 2 + EXIT THEN 12 + . 2 + EXIT THEN
+ DUP ['] (S") = IF DROP 83 EMIT 34 EMIT 32 EMIT DUP COUNT TYPE 34 EMIT 32 EMIT DUP C@ 1+ + EXIT THEN
+ DUP ['] (DOES>) = IF DROP S" DOES> " TYPE 2 + EXIT THEN
+ DUP ['] BRANCH = OVER ['] 0BRANCH = OR IF .NAME DUP @ DUP FAR @ MAX FAR ! . 2 + EXIT THEN
+ .NAME ;
+: .CHAIN 10 + @ DUP .NAME BEGIN DUP CREATED? WHILE S" <- " TYPE 10 + @ DUP .NAME REPEAT DROP ;
+: (SEE) 0 FAR ! BEGIN DUP @ DUP ['] EXIT = IF OVER FAR @ < 0= IF DROP DROP 59 EMIT 32 EMIT EXIT THEN THEN
+ SWAP 2 + SWAP SEE1 AGAIN ;
+: SEE ' DUP @ IF S" code " TYPE .NAME EXIT THEN
+ DUP CREATED? IF S" created " TYPE DUP .NAME S" made by " TYPE DUP .CHAIN
+ DUP 6 + @ DUP ['] EXIT = IF DROP DROP EXIT THEN S" does " TYPE 2 + (SEE) DROP EXIT THEN
+ 58 EMIT 32 EMIT DUP .NAME 2 + (SEE) ;
+: KIDS BEGIN ?DUP WHILE
+ DUP >CFA DUP CREATED? IF 10 + @ WHO @ = IF DUP 2 + COUNT 31 AND TYPE 32 EMIT THEN ELSE DROP THEN @ REPEAT ;
+: CHILDREN ' WHO ! LATEST @ KIDS VOCS @ BEGIN ?DUP WHILE
+ DUP GROWING @ = 0= IF DUP @ KIDS THEN 4 + @ REPEAT ;
+: ABOVE BEGIN DUP FAR @ > WHILE NIP DUP @ REPEAT DROP ;
+: DATA-END FAR ! HERE LATEST @ ABOVE VOCS @ BEGIN ?DUP WHILE
+ >R HERE R@ @ ABOVE MIN R> 4 + @ REPEAT ;
+: CLONE DUP CREATED? 0= IF DROP BL WORD DROP S" only a created word divides " TYPE EXIT THEN
+ CREATE DUP 6 + @ LATEST @ >CFA 6 + !
+ DUP LATEST @ >CFA 10 + !
+ DUP 12 + SWAP DATA-END OVER - HERE SWAP DUP ALLOT CMOVE ;
+: IS-A? WHO ! BEGIN DUP WHO @ = IF DROP -1 EXIT THEN DUP CREATED? WHILE 10 + @ REPEAT DROP 0 ;
+</script>
+<!-- ==== VIDEO: the 320x200 picture ( needs BOOT, LIFE and the video chip ); remove to drop it ==== -->
+<script type="text/forth" id="video">
+: MAPS 55936 ;
+: MAP 1000 * MAPS + ;
+: >TILE MAP SWAP 40 * + + ;
+: TILE! >TILE C! ;
+: TILE@ >TILE C@ ;
+: ATTRS 60032 ;
+: >ATTR 1000 * ATTRS + SWAP 40 * + + ;
+: ATTR! >ATTR C! ;
+: TINT >ATTR SWAP ROT FILL ;
+: FLIP-X 16 ; : FLIP-Y 32 ; : TURN 64 ; : INVERSE 128 ;
+: CLEAR DUP MAP 1000 32 FILL 0 0 ROT >ATTR 1000 0 FILL ;
+: AT-TYPE >TILE SWAP CMOVE ;
+: LAYER 6 * 59936 + ;
+: SCROLL LAYER >R R@ 2 + ! R> ! ;
+: LAYER-ON -1 SWAP LAYER 4 + ! ;
+: LAYER-OFF 0 SWAP LAYER 4 + ! ;
+: SPRITE 8 * 64032 + ;
+: X2 4 ; : X4 8 ; : X8 12 ;
+: PUT SPRITE >R R@ 2 + ! R> ! ;
+: SHOW SPRITE >R R@ 6 + C! R@ 4 + ! -1 R> 7 + C! ;
+: HIDE 0 SWAP SPRITE 7 + C! ;
+: SPRITE-ATTR SPRITE 5 + C! ;
+: SCREEN 53248 ;
+: COLOUR-RAM 54248 ;
+: COLOUR 55312 ;
+: VIEW 55316 ;
+: AT-XY CURSOR 1+ C! CURSOR C! ;
+MEMBRANE
+VARIABLE XA VARIABLE YA VARIABLE XB VARIABLE YB VARIABLE DX VARIABLE SX
+VARIABLE DY VARIABLE SY VARIABLE ER VARIABLE E2 VARIABLE LC
+SURFACE
+: LINE
+ LC ! YB ! XB ! YA ! XA !
+ XB @ XA @ - ABS DX ! XA @ XB @ < IF 1 ELSE -1 THEN SX !
+ YB @ YA @ - ABS NEGATE DY ! YA @ YB @ < IF 1 ELSE -1 THEN SY !
+ DX @ DY @ + ER !
+ BEGIN
+ XA @ YA @ LC @ PLOT
+ XA @ XB @ = YA @ YB @ = AND IF EXIT THEN
+ ER @ DUP + E2 !
+ E2 @ DY @ < 0= IF DY @ ER +! SX @ XA +! THEN
+ E2 @ DX @ > 0= IF DX @ ER +! SY @ YA +! THEN
+ AGAIN ;
+SEAL
+MEMBRANE
+VARIABLE CX VARIABLE CY VARIABLE COL VARIABLE PX VARIABLE PY VARIABLE CD
+: DOT CY @ + SWAP CX @ + SWAP COL @ PLOT ;
+: 8DOTS PX @ PY @ DOT PX @ NEGATE PY @ DOT PX @ PY @ NEGATE DOT PX @ NEGATE PY @ NEGATE DOT
+ PY @ PX @ DOT PY @ NEGATE PX @ DOT PY @ PX @ NEGATE DOT PY @ NEGATE PX @ NEGATE DOT ;
+SURFACE
+: CIRCLE COL ! PY ! CY ! CX ! 0 PX ! 1 PY @ - CD !
+ BEGIN PX @ PY @ 1+ < WHILE
+ 8DOTS
+ CD @ 0 < IF PX @ DUP + 3 + CD +!
+ ELSE PX @ PY @ - DUP + 5 + CD +! -1 PY +! THEN
+ 1 PX +!
+ REPEAT ;
+SEAL
+MEMBRANE
+VARIABLE HD VARIABLE TL VARIABLE OLDC VARIABLE NEWC VARIABLE UP VARIABLE DN VARIABLE FX VARIABLE FY
+CREATE FQ 4096 ALLOT
+: QI 4095 AND FQ + ;
+: >Q SWAP HD @ QI ! 2 HD +! HD @ QI ! 2 HD +! ;
+: Q> TL @ QI @ 2 TL +! TL @ QI @ 2 TL +! ;
+: OLD? POINT OLDC @ = ;
+: SEEDUP FX @ FY @ 1- OLD? IF UP @ 0= IF FX @ FY @ 1- >Q 1 UP ! THEN ELSE 0 UP ! THEN ;
+: SEEDDN FX @ FY @ 1+ OLD? IF DN @ 0= IF FX @ FY @ 1+ >Q 1 DN ! THEN ELSE 0 DN ! THEN ;
+SURFACE
+: FLOOD NEWC ! 2DUP POINT OLDC !
+ OLDC @ NEWC @ = OLDC @ 0 < OR IF DROP DROP EXIT THEN
+ 0 HD ! 0 TL ! >Q
+ BEGIN HD @ TL @ = 0= WHILE
+ Q> FY ! FX !
+ FX @ FY @ OLD? IF
+ BEGIN FX @ 1- FY @ OLD? WHILE -1 FX +! REPEAT
+ 0 UP ! 0 DN !
+ BEGIN FX @ FY @ OLD? WHILE FX @ FY @ NEWC @ PLOT SEEDUP SEEDDN 1 FX +! REPEAT
+ THEN
+ REPEAT ;
+SEAL
+: SPAN SPRITE 6 + C@ DUP 3 AND 8 SWAP LSHIFT SWAP 2 RSHIFT 3 AND LSHIFT ;
+: SHOWN? SPRITE 7 + C@ 0= 0= ;
+: MEET? OVER + >R >R OVER + R> > SWAP R> < AND ;
+: BOX-X DUP SPRITE @ SWAP SPAN ;
+: BOX-Y DUP SPRITE 2 + @ SWAP SPAN ;
+: TOUCHING? 2DUP SHOWN? SWAP SHOWN? AND 0= IF DROP DROP 0 EXIT THEN
+ 2DUP >R BOX-X R> BOX-X MEET? >R >R BOX-Y R> BOX-Y MEET? R> AND ;
+: ON-SPRITE? >R R@ BOX-Y OVER + WITHIN SWAP R> BOX-X OVER + WITHIN AND ;
+: SPRITE-AT 0 BEGIN DUP 128 < WHILE
+ DUP SHOWN? IF >R 2DUP R@ ON-SPRITE? IF DROP DROP R> EXIT THEN R> THEN 1+ REPEAT DROP DROP DROP -1 ;
+: WRAP DUP >R MOD R@ + R> MOD ;
+: TILE-UNDER >R DUP SPRITE @ OVER SPAN 2/ + R@ LAYER @ + 320 WRAP 8 /
+ SWAP DUP SPRITE 2 + @ SWAP SPAN 2/ + R@ LAYER 2 + @ + 200 WRAP 8 / R> TILE@ ;
+</script>
+<!-- ==== BASIC: C64 BASIC words, just for fun ( needs CHIPS ); remove to drop them ==== -->
+<script type="text/forth" id="basic">
+: PEEK C@ ; : POKE SWAP C! ;
+: DEEK @ ; : DOKE SWAP ! ;
+: SGN DUP 0 < IF DROP -1 ELSE 0= 0= 1 AND THEN ;
+: SQR >R 0 BEGIN 1+ DUP DUP * R@ > UNTIL 1- R> DROP ;
+: TI FRAMES @ ;
+CREATE SINES 0 , 4 , 9 , 13 , 18 , 22 , 27 , 31 , 36 , 40 , 44 , 49 , 53 , 58 , 62 , 66 , 71 , 75 , 79 , 83 , 88 , 92 , 96 , 100 , 104 , 108 , 112 , 116 , 120 , 124 , 128 , 132 , 136 , 139 , 143 , 147 , 150 , 154 , 158 , 161 , 165 , 168 , 171 , 175 , 178 , 181 ,
+ 184 , 187 , 190 , 193 , 196 , 199 , 202 , 204 , 207 , 210 , 212 , 215 , 217 , 219 , 222 , 224 , 226 , 228 , 230 , 232 , 234 , 236 , 237 , 239 , 241 , 242 , 243 , 245 , 246 , 247 , 248 , 249 , 250 , 251 , 252 , 253 , 254 , 254 , 255 , 255 , 255 , 256 , 256 , 256 , 256 ,
+: QSIN DUP 90 > IF 180 SWAP - THEN 2 * SINES + @ ;
+: SIN 360 + 360 MOD DUP 180 < IF QSIN ELSE 180 - QSIN NEGATE THEN ;
+: COS 90 + SIN ;
+: LEN NIP ; : ASC DROP C@ ;
+: LEFT$ MIN 0 MAX ;
+: RIGHT$ OVER MIN 0 MAX >R + R@ - R> ;
+: MID$ >R OVER MIN 0 MAX /STRING R> MIN 0 MAX ;
+CREATE CHR 1 ALLOT : CHR$ CHR C! CHR 1 ;
+: VAL DUP IF OVER C@ 45 = ELSE 0 THEN DUP >R IF 1 /STRING THEN 0 -ROT
+ BEGIN DUP WHILE OVER C@ 48 - DUP 0 10 WITHIN 0= IF DROP DROP DROP R> IF NEGATE THEN EXIT THEN
+ >R ROT 10 * R> + -ROT 1 /STRING REPEAT DROP DROP R> IF NEGATE THEN ;
+CREATE DIGITS 8 ALLOT
+: STR$ DUP >R ABS DIGITS 8 + SWAP
+ BEGIN 10 U/MOD SWAP 48 + ROT 1- TUCK C! SWAP ?DUP 0= UNTIL
+ R> 0< IF 1- 45 OVER C! THEN DIGITS 8 + OVER - ;
+VARIABLE DATA-AT : RESTORE DATA-AT ! ; : READ DATA-AT @ @ 2 DATA-AT +! ;
+</script>
+<!-- ==== MOTORS: LEGO workers run every frame ( needs CHIPS ); remove to drop them ==== -->
+<script type="text/forth" id="motors">
+: FIELD CREATE , DOES> @ + ;
+2 FIELD >JOB 4 FIELD >FLAGS 6 FIELD >COUNT 8 FIELD >TOGGLE 10 FIELD >RELOAD
+12 FIELD >BEFORE 14 FIELD >AFTER 16 FIELD >A 18 FIELD >B 20 FIELD >C 22 FIELD >D
+: F-RUN 1 ; : F-KILL 2 ; : F-BOUNCE 4 ; : F-WRAP 8 ; : F-ONCE 16 ;
+: FLAG+ >FLAGS DUP @ ROT OR SWAP ! ;
+: FLAG- >FLAGS DUP @ ROT INVERT AND SWAP ! ;
+: FLAG? >FLAGS @ AND ;
+: ON F-RUN SWAP FLAG+ ;
+: OFF F-RUN SWAP FLAG- ;
+: KILL F-KILL SWAP FLAG+ ;
+: BOUNCES F-BOUNCE SWAP FLAG+ ;
+: WRAPS F-WRAP SWAP FLAG+ ;
+: ONCE F-ONCE SWAP FLAG+ ;
+: TIMER >R R@ >RELOAD ! R@ >TOGGLE ! R> >COUNT ! ;
+: BEFORE >BEFORE ! ;
+: AFTER >AFTER ! ;
+VARIABLE MOTORS
+VARIABLE THIS
+: MINE THIS @ ;
+: HOOK @ ?DUP IF OVER SWAP EXECUTE THEN ;
+: COUNTS DUP >COUNT @ ?DUP IF 1- 2DUP SWAP >COUNT ! 0= IF
+ DUP >TOGGLE @ OVER >FLAGS @ XOR OVER >FLAGS ! DUP >RELOAD @ OVER >COUNT ! THEN THEN ;
+: WORK DUP THIS !
+ F-RUN OVER FLAG? IF DUP >BEFORE HOOK DUP DUP >JOB @ EXECUTE DUP >AFTER HOOK THEN
+ COUNTS DROP ;
+: RUN-MOTORS MOTORS BEGIN DUP @ ?DUP WHILE
+ DUP WORK F-KILL OVER FLAG? IF @ OVER ! ELSE NIP THEN REPEAT DROP
+ MOTORS @ 0= IF 0 VBL ! THEN ;
+: MOTOR HERE >R 24 ALLOT R@ 24 ERASE
+ R@ >JOB ! R@ >D ! R@ >C ! R@ >B ! R@ >A ! F-RUN R@ >FLAGS !
+ MOTORS BEGIN DUP @ ?DUP WHILE NIP REPEAT R@ SWAP ! ['] RUN-MOTORS VBL ! R> ;
+: ADD DUP >B @ @ SWAP >A @ +! ;
+: ADDER 0 0 ['] ADD MOTOR ;
+: LANDS MINE >A @ ! F-BOUNCE MINE FLAG? IF MINE >D @ DUP @ NEGATE SWAP ! THEN ;
+: LIMIT >A @ @
+ DUP MINE >B @ < IF DROP F-WRAP MINE FLAG? IF MINE >C ELSE MINE >B THEN @ LANDS EXIT THEN
+ MINE >C @ > IF F-WRAP MINE FLAG? IF MINE >B ELSE MINE >C THEN @ LANDS THEN ;
+: LIMITER ['] LIMIT MOTOR ;
+: STEP DROP FRAMES @ MINE >D @ MOD IF EXIT THEN
+ MINE >C @ DUP 2 * MINE >B @ + 2 + @ MINE >A @ !
+ 1+ DUP MINE >B @ @ = IF DROP 0 F-ONCE MINE FLAG? IF MINE OFF THEN THEN MINE >C ! ;
+: PATH 1 MAX 0 SWAP ['] STEP MOTOR ;
+: COPY DUP >B @ ?DUP IF OVER >A @ ROT >C @ CMOVE ELSE DUP >A @ SWAP >C @ ERASE THEN ;
+: MOVER 0 ['] COPY MOTOR ;
+: RUN-A DUP >A @ EXECUTE ;
+: CODER 0 0 0 ['] RUN-A MOTOR ;
+: KIND CREATE , DOES> @ CREATE MOTOR DROP ;
+: REACH DUP DUP >BEFORE @ MAX OVER >AFTER @ MAX OVER >A @ MAX NIP ;
+: CUT-MOTORS NEW ! MOTORS BEGIN DUP @ ?DUP WHILE
+ REACH NEW @ < IF @ ELSE DUP @ @ OVER ! THEN REPEAT DROP ;
+: CUT-BOTH DUP CUT-TASKS CUT-MOTORS ; ' CUT-BOTH IS PRUNE
+</script>
+<!-- ==== TIME: MS EVERY LATER ALARM ( needs MOTORS ); remove to drop it ==== -->
+<script type="text/forth" id="time">
+: MS DUP 50 / 3 * SWAP 50 MOD 3 * 50 / +
+ FRAMES @ + 1 TICKERS +! BEGIN DUP FRAMES @ - 0 > WHILE SWITCH REPEAT DROP -1 TICKERS +! ;
+: EVERY SWAP CODER >R R@ OFF ['] OFF R@ AFTER F-RUN OVER R@ TIMER R> ;
+: LATER SWAP CODER >R R@ OFF ['] KILL R@ AFTER F-RUN 0 R@ TIMER R> ;
+MEMBRANE VARIABLE T0 VARIABLE CALLS VARIABLE TOTAL SURFACE
+: START-TIMING RUN-MS @ T0 ! CALLS @ 99 > IF 0 CALLS ! 0 TOTAL ! THEN ;
+: END-TIMING RUN-MS @ T0 @ - TOTAL +! 1 CALLS +! CALLS @ 99 > IF
+ CR S" -------------------- average of 100 calls: " TYPE
+ TOTAL @ 100 /MOD U. 46 EMIT DUP 10 < IF 48 EMIT THEN U. S"  ms" TYPE CR THEN ;
+: PROFILE 100 BEGIN ?DUP WHILE OVER START-TIMING EXECUTE END-TIMING 1- REPEAT DROP ;
+SEAL
+: DUE? >R NOW R@ >B @ - ?DUP IF NIP 0 > ELSE R@ >C @ - 0 < 0= THEN R> DROP ;
+: RING DUP DUE? IF DUP >D @ IF DUP >A @ EXECUTE KILL ELSE DROP THEN
+ ELSE -1 SWAP >D ! THEN ;
+: ALARM >R SWAP 60 * + R> 0 ['] RING MOTOR ;
+</script>
+
+<script>
+// ITCH kernel: indirect-threaded Forth for a 6502/x64 style machine. 32 primitives, one runtime (DOCOL).
+const DP = 0, LATEST = 2, TOIN = 4, NTIB = 6, BASE = 8, SRC = 10,
+  ME = 14, TASK0 = 0x0100;
+const S0 = 0x0300, R0 = 0x0400;
+const DICT = 0x0500;
+const WBUF = 0x0400, TIB = 0x7800;
+const DOCOL = 0,
+  EXIT = 1, LIT = 2, BRANCH = 3, ZBRANCH = 4, EXECUTE = 5,
+  DUP = 6, DROP = 7, SWAP = 8, OVER = 9, TOR = 10, RFROM = 11,
+  RPFETCH = 12, RPSTORE = 13, SPFETCH = 14, SPSTORE = 15,
+  PLUS = 16, MINUS = 17, STAR = 18, DIVMOD = 19, LESS = 20,
+  AND = 21, OR = 22,
+  FETCH = 23, STORE = 24, CFETCH = 25, CSTORE = 26,
+  EMIT = 27, SLEEP = 28,
+  WORD = 29, BACKSLASH = 30, FIND = 31, NUMBER = 32;
+const NAMES = "EXIT LIT BRANCH 0BRANCH EXECUTE DUP DROP SWAP OVER >R R> RP@ RP! SP@ SP! " +
+  "+ - * U/MOD < AND OR @ ! C@ C! EMIT SLEEP WORD \\ FIND NUMBER";
+let m, IP, W, SP, RP;
+let xtLIT, xtEXIT;
+let out;
+let slp = 0;
+let emit = c => { out = c === 8 ? out.slice(0, -1) : c === 12 ? '' : out + String.fromCharCode(c); };
+const utf8in = new TextEncoder();
+function load(s) {
+  const b = utf8in.encode(s);
+  if (b.length > 0xD000 - TIB) throw new Error('block too big: ' + b.length + ' bytes');
+  m.set(b, TIB); wr(SRC, TIB); wr(NTIB, b.length); wr(TOIN, 0);
+}
+const rd = a => m[a & 0xFFFF] | m[(a + 1) & 0xFFFF] << 8;
+const wr = (a, v) => { m[a & 0xFFFF] = v; m[(a + 1) & 0xFFFF] = v >> 8; };
+const s16 = v => v << 16 >> 16;
+const floor = () => 2 * rd(rd(ME) + 6) - rd(rd(ME) + 8);
+const push = v => { if (SP === floor()) abort(WBUF, ' stack full'); SP -= 2; wr(SP, v); };
+const pop = () => { if (SP === rd(rd(ME) + 6)) abort(WBUF); SP += 2; return rd(SP - 2); };
+const rpush = v => { if (RP === rd(rd(ME) + 6)) abort(WBUF, ' return stack full'); RP -= 2; wr(RP, v); };
+const rpop = () => { RP += 2; return rd(RP - 2); };
+const comma = v => { wr(rd(DP), v); wr(DP, rd(DP) + 2); };
+function abort(a, why = ' ?') {
+  for (let i = 1; i <= m[a]; i++) emit(m[a + i]);
+  for (const c of why) emit(c.charCodeAt(0));
+  SP = rd(rd(ME) + 6); RP = rd(rd(ME) + 8); throw 0;
+}
+const cfa = h => h + 3 + (m[h + 2] & 31);
+function header(a) {
+  const h = rd(DP), n = Math.min(m[a], 31);
+  comma(rd(LATEST)); m[h + 2] = n;
+  for (let i = 0; i < n; i++) m[h + 3 + i] = m[a + 1 + i];
+  wr(DP, h + 3 + n); wr(LATEST, h);
+}
+function find(a) {
+  for (let h = rd(LATEST); h; h = rd(h)) {
+    const n = m[h + 2] & 31;
+    if (n !== m[a]) continue;
+    let i = 0; while (i < n && m[h + 3 + i] === m[a + 1 + i]) i++;
+    if (i === n) return h;
+  }
+  return 0;
+}
+const delim = (c, d) => d === 32 ? c <= 32 : c === d;
+function word(d) {
+  const s = rd(SRC), end = rd(NTIB);
+  let i = rd(TOIN), n = 0;
+  if (d === 32) while (i < end && delim(m[s + i], d)) i++;
+  while (i < end && !delim(m[s + i], d)) { if (n < 255) m[WBUF + 1 + n++] = m[s + i]; i++; }
+  m[WBUF] = n;
+  wr(TOIN, i < end && delim(m[s + i], d) ? i + 1 : i);
+  return WBUF;
+}
+function tick() {
+  const h = find(word(32)); if (!h) abort(WBUF); return cfa(h);
+}
+function number(a) {
+  const neg = m[a + 1] === 45 && m[a] > 1; let v = 0;
+  for (let i = neg ? 2 : 1; i <= m[a]; i++) {
+    let d = m[a + i] - 48;
+    d = d > 16 ? d - 7 : d > 9 ? 99 : d;
+    if (d < 0 || d >= rd(BASE)) abort(a);
+    v = (v * rd(BASE) + d) & 0xFFFF;
+  }
+  return neg ? -v & 0xFFFF : v;
+}
+function step(c) {
+  let a, b;
+  switch (c) {
+    case DOCOL: rpush(IP); IP = W + 2; break;
+    case EXIT: IP = rpop(); break;
+    case LIT: push(rd(IP)); IP += 2; break;
+    case BRANCH: IP = rd(IP); break;
+    case ZBRANCH: IP = pop() ? IP + 2 : rd(IP); break;
+    case EXECUTE: W = pop(); step(rd(W)); break;
+    case DUP: if (SP === rd(rd(ME) + 6)) abort(WBUF); push(rd(SP)); break;
+    case DROP: pop(); break;
+    case SWAP: a = pop(); b = pop(); push(a); push(b); break;
+    case OVER: a = rd(rd(ME) + 6); if (SP === a || SP + 2 === a) abort(WBUF);
+    push(rd(SP + 2)); break;
+    case TOR: rpush(pop()); break;
+    case RFROM: push(rpop()); break;
+    case RPFETCH: push(RP); break;
+    case RPSTORE: RP = pop(); break;
+    case SPFETCH: push(SP); break;
+    case SPSTORE: a = pop(); SP = a; break;
+    case PLUS: a = pop(); push(pop() + a); break;
+    case MINUS: a = pop(); push(pop() - a); break;
+    case STAR: a = pop(); push(pop() * a); break;
+    case DIVMOD: a = pop(); b = pop(); if (!a) abort(WBUF, ' division by zero');
+    push(b % a); push((b - b % a) / a); break;
+    case LESS: a = s16(pop()); push(s16(pop()) < a ? -1 : 0); break;
+    case AND: push(pop() & pop()); break;
+    case OR: push(pop() | pop()); break;
+    case FETCH: push(rd(pop())); break;
+    case STORE: a = pop(); wr(a, pop()); break;
+    case CFETCH: push(m[pop()]); break;
+    case CSTORE: a = pop(); m[a] = pop(); break;
+    case EMIT: emit(pop()); break;
+    case SLEEP: slp = 1; break;
+    case WORD: push(word(pop())); break;
+    case BACKSLASH: a = rd(TOIN); b = rd(SRC);
+    if (m[b + a - 1] !== 10) {
+    while (a < rd(NTIB) && m[b + a] !== 10) a++;
+    wr(TOIN, a);
+    } break;
+    case FIND: push(find(pop())); break;
+    case NUMBER: push(number(pop())); break;
+    default: abort(WBUF, ' is not code');
+  }
+}
+function run(xt) {
+  IP = 0; W = xt; step(rd(W));
+  while (IP) { W = rd(IP); IP += 2; step(rd(W)); }
+}
+function start(xt) { IP = 0; W = xt; step(rd(W)); }
+function slice(n) {
+  slp = 0;
+  try { while (n-- && IP && !slp) { W = rd(IP); IP += 2; step(rd(W)); } }
+  catch (e) { if (e !== 0) throw e; IP = 0; if (rd(rd(ME) + 4)) start(rd(rd(ME) + 4)); }
+}
+function interpret() {
+  let comp = 0;
+  for (;;) {
+    const a = word(32); if (!m[a]) return;
+    if (m[a] === 1 && m[a + 1] === 58) { header(word(32)); comma(DOCOL); comp = 1; continue; }
+    if (m[a] === 1 && m[a + 1] === 59) { comma(xtEXIT); comp = 0; continue; }
+    const h = find(a);
+    const side = m[h + 2] & 0xC0;
+    if (h && (!comp || side === 0x40 || side === 0x80)) run(cfa(h));
+    else if (h) comma(cfa(h));
+    else if (comp) { comma(xtLIT); comma(number(a)); }
+    else push(number(a));
+  }
+}
+function boot() {
+  m = new Uint8Array(65536); SP = S0; RP = R0; out = '';
+  wr(DP, DICT); wr(BASE, 10); wr(ME, TASK0); wr(TASK0 + 6, S0); wr(TASK0 + 8, R0);
+  load(NAMES);
+  for (let c = EXIT; c <= NUMBER; c++) {
+    header(word(32)); comma(c);
+    if (c === BACKSLASH) m[rd(LATEST) + 2] |= 0x80;
+    if (c === TOR || c === RFROM || c === RPSTORE) m[rd(LATEST) + 2] |= 0xC0;
+  }
+  load('LIT EXIT'); xtLIT = tick(); xtEXIT = tick();
+}
+</script>
+
+<script>
+// VIDEO CHIP: 320x200 bitmap, 4 tile layers, 128 sprites; adds CLS PLOT POINT. A plug-in card.
+const VW = 320, VH = 200, MAPS = 0xDA80, LREGS = 0xEA20, ATTRS = 0xEA80, SPRITES = 0xFA20;
+const PAL = [0, 0xFFFFFF, 0x880000, 0xAAFFEE, 0xCC44CC, 0x00CC55, 0x0000AA, 0xEEEE77,
+  0xDD8855, 0x664400, 0xFF7777, 0x333333, 0x777777, 0xAAFF66, 0x0088FF, 0xBBBBBB]
+  .map(c => (0xFF000000 | (c & 255) << 16 | (c >> 8 & 255) << 8 | c >> 16) >>> 0);
+const CLS = 40, PLOT = 41, POINT = 42;
+const VID = new Uint16Array(VW * VH);
+const TILES = new Uint32Array(256 * 64);
+const BLANK = new Uint8Array(256);
+const DAC = new Uint32Array(4096);
+for (let c = 0; c < 4096; c++) DAC[c] = (0xFF000000 | (c & 15) * 17 << 16 | (c >> 4 & 15) * 17 << 8 | (c >> 8 & 15) * 17) >>> 0;
+const sheet = new Image();
+sheet.onload = () => {
+  const c = document.createElement('canvas'); c.width = c.height = 128;
+  const g = c.getContext('2d'); g.drawImage(sheet, 0, 0); const d = g.getImageData(0, 0, 128, 128).data;
+  for (let t = 0; t < 256; t++) for (let y = 0; y < 8; y++) for (let x = 0; x < 8; x++) {
+    const i = (((t >> 4) * 8 + y) * 128 + (t & 15) * 8 + x) * 4;
+    TILES[t * 64 + y * 8 + x] = d[i + 3] ? (0xFF000000 | d[i + 2] << 16 | d[i + 1] << 8 | d[i]) >>> 0 : 0;
+  }
+  for (let t = 0; t < 256; t++) BLANK[t] = TILES.subarray(t * 64, t * 64 + 64).every(c => !c) && t !== 32 ? 1 : 0;
+};
+sheet.src = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAIAAAACACAYAAADDPmHLAAAJgElEQVR4Xu2aPW4cRxOGqwUFgkMfxYDO4ETpbiL4AgwciIBCBQoJUIED6wCGEjJVojMY+HSTLzSctQNOcd95p6q7emZ3SYr1GAa3662//pneXVJFOrx7+2tl2wifvnwrbEN6+b14jfP0NVg5o/1xbHTMjM6H847ykg2jrC28BW/xTsGnL9/Klnrv3v5aP335VjQPj9n/LFzVKu9LERHpbl6vyVMdAO9kYz+sbcWriZoHP9mjY8WqHYHzNoED0L0BQgnPxNbN58X2sOqsfWI17t1b+yZg/whWf11g05HupMIFjgyf6OikeT7oy1oErsU5uL+1Y8XLr7CusN+Mq7qMid4Aj4Ho5kfZkuPTl7GbQJ90jeMx+7ew1iGU430p3g1w8gPQa7C3GdakHxrcPH6SrTFvOo415wgY59VdYGy+iMgLNjxW3Ik9ENF+vA3qPRiPhqvXr+rV61eLZj17i1ql1irtmD9s/bd69x+/XlCN97vVLHN9/elr/frT14U9wm63q7vdblXsFqqBavdvAf+T+cL/Ql8Rr16/qu///rfoa9REROrlzzNbuf5/6AmZoZv/h1T5/VAfN5tf/1X+OtTRidVapdhXXhx789/886bwa6VeXlYRkXJ9PVz748ePs3ofPnyY5bi5uZnp+/1+XpserFLoK/7FxWxYa62llPJCZLn5aNNNF1k+9arx5rNNn/xSpJQixbwJ+MnncQ841eaY2O1q3e08H7UfDhE/9d7m8+sIvPlsu7m5qbjh+/2+4IHQtdWxrrGOF/z5p5TpAQl9CHz/97+Fn3o8GIo+9daBaOJtNt0ELt5mw01gbfbtrW4wbnh78/U1HgBrw+vlZS3X18W68tF2e3vbn5/MbwC+DUTuDoH12uTiYn4DnBp+8nV87+Bt8mSfXfOAZ2dw8w+bbrHcfJH5Zr/5503hp79cXxe89nl8LPb7feGrX+EbALXv03S+f/58ME6HIHQA+On3bPXy5zr89Ct8CGjMmz0bl+lIIWBrbzqz9LWeen5L8Li9vS36f8vWQ699fjtQ8MHiG+AXkfL98+f7n/dcXNx9DeQPfGjj93z+TCByuPoRtoWuKN10PgwTuul8GERk+TbA4xD+5utr/Z9vgS3wBz628Xs+HwJ94vWGRZui+4mHYHYYPPiDX8/+nKmXl9X6PKA81NdAC/2Qvzh5Ler0VOknSM8+OlZG7LXefYhhH4VzIFa+nubZnzqhzwDnADewTqCOsIaboxvEPkprI1taK+9dt/3+PftDoL0sJtpCm+cFYjuOexNGH85r4flyHdZF/Niehnh+W+ufE+xjqJG1E+A4HqNNsWpYcayJ2HqPVm6E/bhvphT/IejVUrbGI9z/cIJRvOYVaxLcpGfzNKxp+VtwDg/Pj+fJuogfey6s+if/DIDFygRrleA4tqFfC8zRA3OzpnAflj2SxyM6L49WPPaI9qED0CqwBVw4HaPu2RRcdOxvtNfW5qnN6sPqP+J3Llq9J48EPrzn4v5EcHHrtLROUi++pyNch2MVzME+LU1p+XB/Pf1YYJ1ojUiM1/8LFMsE2iL04ns64tlFDvGYRySen+OUXnxPPxZWnQi9vqy8alv8OdhKIOLbRfxTp/R0pVVDZK63crKGY1yMg8dx6OVu6RGNYd9S7r5y1jr/LSn7IYtTo0n0tdpF2k0qLR+uw3a18ZhhHfMqVizHWZrCPqyLLH3W0uprDa18rM1uACsgCie2UK1OsC8vsuXTopffQ+u24vG1+h+LUuwnV/HqtXyj2uItYA1WYqSns539eXxuovV7fi29FP8Q8NijlV/Ett8bNPheAGfWFPXp6SJLH6sZxZpIL76ni9h5WVPYp6dHaNVXsE7LD4nGROonJ6JOsP2hCT9hIv4J4liRvg/qLU1kqSvq19NFlj6WxvksH4V7FPF9OF9vzFg62ljnMdoU1cK/B8Axa4oXH8mvuqeJHOIxT0SP1m+B+fA1EvHBXljrobFe7z27Nf/F3wKsJK0Ea8A8zDHy92jVPyW4jqxF6a1LT2eGvgX0kqO+ZZIevQXs6SLtHnvzOwZcc4RS7q57/cn6GhY3QAE8je0K6sdqEBmp79HSI/Fb2bourf5amsfiAChbG21RJ9guEnuKHxut+SA6p4jvWkbX7aXI4WrBxkYTifjXazS/6pYmslw4z4+J1m+BsbUuf0uI+Vu50Zf9sIZIO88I3J/a0Cd5prhXEp8Q9kGdNZHt8SIHH9WPNWYb62vHjFXP0iJE4rmvCLPPAGVCZF4QE1u64um9eLRb48eO9hvp2/KpE2hjrDjEWu8I7ofAU9KbzLnRXnAj1va3Jh7rsxYBa47mmh2ArQvgxWNT6PMQeLWtfnmMvbOP6p7WA2uw1qNMeOMW5ltANNjDiufcaya6Fa1p1UabpeOcrPlt2XzlIdYm9BaAjbUm6k0A405BtD8R244x3hxa9GqOsKb+FkIHQGS+OCJ+g9YE0LZmsSLxOGZNUbunb0X7wz6ZlqbgfNUWifPQWIb9kudOnoznx+Iq1AMwck2uiWmxJR8e4Gh8tN5aPx5brOn7GCz+HFyK/btqbFD9cNzjHPGtheZ4EduvRdQ/6oeU4v+Jl+fljRHugX1UH25UZLwB9rdo5eB4HqMN8fy9McK9og9rjJe/lOWvnRFPs/pTrJwj4/C3gAqwppQJkXbTDDak8Rat+hjXy+OBcVxnTT4G58naQxE6ANENOjVaf7QP9W0doHOAfbAWQeNH5t4jdACiC4g6NsnxnIN11Czd8ulRANYiYM019RWcC9qj+df0z+uHtuFkTxFrQdcsZAuucez8p+JJNPmjgIfEOiD8dFqaiK3/EOAV9aMRmduxfEZ4KbK8vkSWp6zl09KUlg9rOmb9WGO2sb52zGC9U1Pr4Z+L40/2Y8w/B4vMJ4UTbiWNxqMfx1njY2JtltaqE2iLoP1iDL5ek9NDc/D6ljK++SLBbwGj3C3FcjF0gbH5c6J1rfpWv6NoXo7H+aN9DVYNfc0/I4T+RRBOYO0kCiBynMVQrP6s/hm0Yz/cm5Wfseo+BWabEW2e/XnMWIsW8fU2SOEcrT5QY7/eGLE0qzeRZTz6sSZi52ZNxNbX0p2wxaj/U4c3+LnMO0mSJEmSJEmSJEmSJEmSJEmSJEmSJEmSJEmSJEmSJEmSJEmSJEmSJEmSJEmSJEmSJEmSJEmSJEmSJEmSJEmSJEmSJEmSJEmSJEmSJEmSJEmSJEmSJEmSJEmSJEmSJEmSGP8B+jvHVBTxM4gAAAAASUVORK5CYII=';
+const chipStep = step, chipBoot = boot;
+boot = () => {
+  if (m) keep(m[CURSOR + 1] + (m[CURSOR] > 0));
+  chipBoot(); VID.fill(0); m.fill(32, MAPS, MAPS + 4000); m.fill(32, SCREEN, SCREEN + 1000);
+  m[COLOUR] = 13; m[VIEW] = looks;
+  load('CLS PLOT POINT'); for (const c of [CLS, PLOT, POINT]) { header(word(32)); comma(c); }
+};
+step = c => {
+  if (c < CLS || c > POINT) return chipStep(c);
+  let x, y, k;
+  if (c === CLS) { VID.fill(pop() & 0xFFF); return; }
+  if (c === PLOT) { k = pop() & 0xFFF; y = s16(pop()); x = s16(pop()); if (x >= 0 && x < VW && y >= 0 && y < VH) VID[y * VW + x] = k; return; }
+  y = s16(pop()); x = s16(pop()); push(x >= 0 && x < VW && y >= 0 && y < VH ? VID[y * VW + x] : -1);
+};
+const wrap = (v, n) => (s16(v) % n + n) % n;
+function texel(t0, a, u, v, n) {
+  if (a & 16) u = n - 1 - u;
+  if (a & 32) v = n - 1 - v;
+  if (a & 64) { const w = u; u = v; v = n - 1 - w; }
+  let c = TILES[((t0 + (v >> 3) * 16 + (u >> 3)) & 255) * 64 + (v & 7) * 8 + (u & 7)];
+  if (a & 128) return c ? 0 : PAL[a & 15 || 1];
+  return c && a & 15 ? PAL[a & 15] : c;
+}
+function compose(px) {
+  for (let i = 0; i < VW * VH; i++) px[i] = DAC[VID[i]];
+  for (let L = 0; L < 4; L++) {
+    const r = LREGS + 6 * L; if (!rd(r + 4)) continue;
+    const sx = wrap(rd(r), VW), sy = wrap(rd(r + 2), VH), map = MAPS + 1000 * L, att = ATTRS + 1000 * L;
+    for (let y = 0; y < VH; y++) {
+    const wy = (y + sy) % VH, cell = (wy >> 3) * 40;
+    for (let x = 0; x < VW; x++) {
+    const wx = (x + sx) % VW, i = cell + (wx >> 3), a = m[att + i];
+    const c = a ? texel(m[map + i], a, wx & 7, wy & 7, 8) : TILES[m[map + i] * 64 + (wy & 7) * 8 + (wx & 7)];
+    if (c) px[y * VW + x] = c;
+    }
+    }
+  }
+  for (let n = 127; n >= 0; n--) {
+    const r = SPRITES + 8 * n; if (!m[r + 7]) continue;
+    const sx = s16(rd(r)), sy = s16(rd(r + 2)), t0 = m[r + 4], a = m[r + 5];
+    const blk = 8 << (m[r + 6] & 3), z = m[r + 6] >> 2 & 3, size = blk << z;
+    for (let y = 0; y < size; y++) {
+    const Y = sy + y; if (Y < 0 || Y >= VH) continue;
+    for (let x = 0; x < size; x++) {
+    const X = sx + x; if (X < 0 || X >= VW) continue;
+    const c = texel(t0, a, x >> z, y >> z, blk);
+    if (c) px[Y * VW + X] = c;
+    }
+    }
+  }
+  const v = m[VIEW], [col, cy] = cursorAt(), blink = !(m[0xD802] - still & 32);
+  if (!v) return;
+  for (let r = 0; r < 25; r++) {
+    const [ch, c0, t0, s] = textRow(r), cx = s === cy && blink ? col : -1;
+    for (let y = r * 8; y < r * 8 + 8; y++)
+    for (let x = 0; x < VW; x++) {
+    const i = x >> 3, p = y * VW + x, d = px[p];
+    const b = ch[c0 + i], q = BLANK[b];
+    const c = texel(q ? 63 : b, ch[t0 + i] ^ (i === cx ? 128 : 0) ^ (q ? 128 : 0), x & 7, y & 7, 8);
+    px[p] = c || (v > 1 ? 0xFF000000 : 0xFF000000 | DIM[d >> 16 & 255] << 16 | DIM[d >> 8 & 255] << 8 | DIM[d & 255]);
+    }
+  }
+}
+const SCREEN = 0xD000, TINTS = 0xD3E8, COLOUR = 0xD810, CURSOR = 0xD812, VIEW = 0xD814;
+const MIX = 0.5;
+const DIM = Uint8Array.from({ length: 256 }, (_, c) => c * (1 - MIX));
+let looks = 1, still = 0, up = 0;
+const kept = [];
+const keep = n => { for (let r = 0; r < n; r++) {
+  const row = new Uint8Array(80); row.set(m.subarray(SCREEN + 40 * r, SCREEN + 40 * r + 40));
+  row.set(m.subarray(TINTS + 40 * r, TINTS + 40 * r + 40), 40); kept.push(row); }
+  if (kept.length > 1000) kept.splice(0, kept.length - 1000); };
+const chipEmit = emit;
+emit = c => {
+  chipEmit(c); let x = m[CURSOR], y = m[CURSOR + 1];
+  const line = () => { x = 0; if (y < 24) return y++;
+    keep(1); m.copyWithin(SCREEN, SCREEN + 40, SCREEN + 1000); m.fill(32, SCREEN + 960, SCREEN + 1000);
+    m.copyWithin(TINTS, TINTS + 40, TINTS + 1000); };
+  if (c === 12) { keep(y + (x > 0)); m.fill(32, SCREEN, SCREEN + 1000); x = y = 0; }
+  else if (c === 10 || c === 13) line();
+  else if (c === 8) { if (x) x--; else if (y) { y--; x = 39; } m[SCREEN + y * 40 + x] = 32; }
+  else { if (x > 39) line(); m[SCREEN + y * 40 + x] = c; m[TINTS + y * 40 + x++] = m[COLOUR]; }
+  m[CURSOR] = x; m[CURSOR + 1] = y; still = m[0xD802];
+};
+let textRow = r => { const s = m[VIEW] === 2 ? r - up : r, old = s < 0 && kept[kept.length + s];
+  return old ? [old, 0, 40, -1] : [m, SCREEN + s * 40, TINTS + s * 40, s]; };
+let cursorAt = () => [Math.min(m[CURSOR], 39), m[CURSOR + 1]];
+</script>
+
+<script>
+// HOST: the devices ( keyboard, pointer, clock, sound, frame interrupt ), the ROM, and the page.
+const KHEAD = 0xD800, KTAIL = 0xD801, KRING = 0xD900, KHELD = 0xD880;
+const FRAMES = 0xD802, VBL = 0xD804, TICKERS = 0xD806, RUNMS = 0xD808;
+const CLOCK = 0xD830, VOICES = 0xD840, SCOPE = 0xDA00;
+const POINTERS = 0xFF00, WHEEL = 0xFF78;
+let asleep = false, woke = false, ran = 0;
+const block = id => document.getElementById(id).textContent;
+const say = t => { for (const c of t) emit(c.charCodeAt(0)); };
+function go(program) {
+  boot(); asleep = false;
+  try {
+    load(block('boot')); interpret();
+    load('INTERPRET'); const xi = tick();
+    for (const id of ['life', 'tools', 'chips', 'video', 'basic', 'motors', 'time']) { load(block(id)); run(xi); }
+    ROM = m.slice(0, rd(DP));
+    load(program + '\nQUIT'); timed(xi); asleep = slp;
+  } catch (e) { if (e !== 0) say('\nJS error: ' + (e.message || e)); else if (rd(rd(ME) + 4)) start(rd(rd(ME) + 4)); }
+}
+function timed(xt) {
+  IP = 0; W = xt; slp = 0; step(rd(W));
+  while (IP && !slp) { const t = performance.now(); for (let i = 0; i < 2000 && IP && !slp; i++) { W = rd(IP); IP += 2; step(rd(W)); }
+    ran += performance.now() - t; wr(RUNMS, ran); }
+}
+let ROM = null;
+function boot_rom(img) {
+  boot(); m.set(img); asleep = false;
+  try { load('QUIT'); start(tick()); }
+  catch (e) { if (e !== 0) say('\nJS error: ' + (e.message || e)); }
+}
+function vbl(xt) {
+  const ip = IP, w = W, sp = SP, rp = RP;
+  try { run(xt); } catch (e) { if (e !== 0) throw e; wr(VBL, 0); say(' ( VBL off )\n'); }
+  IP = ip; W = w; SP = sp; RP = rp;
+}
+let due = 0, brk = false;
+function frame(t) {
+  requestAnimationFrame(frame);
+  if (t < due - 1) return;
+  due = t - due > 50 ? t + 1000 / 60 : due + 1000 / 60;
+  beat();
+}
+let onBeat = (t, motors, program, screen) => {};
+function beat() {
+  const t0 = performance.now();
+  let t1 = t0, t2 = t0, t3 = t0;
+  const d = new Date();
+  m[CLOCK] = d.getSeconds(); m[CLOCK + 1] = d.getMinutes(); m[CLOCK + 2] = d.getHours();
+  m[CLOCK + 3] = d.getDate(); m[CLOCK + 4] = d.getMonth() + 1; wr(CLOCK + 6, d.getFullYear());
+  wr(FRAMES, rd(FRAMES) + 1);
+  const vec = rd(VBL), wake = woke || vec || rd(TICKERS); woke = false;
+  try {
+    if (brk) {
+    brk = false; wr(VBL, 0); say(' BREAK');
+    IP = 0; if (rd(rd(ME) + 4)) start(rd(rd(ME) + 4)); asleep = false;
+    }
+    if (vec) vbl(vec);
+    t1 = t2 = t3 = performance.now();
+    if (wake || !asleep) {
+    const end = t0 + 10;
+    do { const t = performance.now(); slice(2000); ran += performance.now() - t; wr(RUNMS, ran); }
+    while (!slp && IP && performance.now() < end);
+    asleep = slp;
+    t2 = performance.now(); draw(true); t3 = performance.now();
+    } else draw(!(rd(FRAMES) - still & 31));
+    sound();
+  } catch (e) { say('\nJS error: ' + (e.message || e)); IP = 0; }
+  onBeat(t0, t1 - t0, t2 - t1, t3 - t2);
+}
+const wave = new Uint8Array(256);
+let audio = null, scope = null; const osc = [], amp = [], hiss = [], hp = [], WAVES = ['', 'square', 'sawtooth', 'triangle', 'sine', 'noise'];
+function soundOn() {
+  if (audio) return; audio = new AudioContext();
+  scope = audio.createAnalyser(); scope.fftSize = 256; scope.connect(audio.destination);
+  const noise = audio.createBuffer(1, audio.sampleRate, audio.sampleRate);
+  noise.getChannelData(0).forEach((_, i, d) => d[i] = Math.random() * 2 - 1);
+  for (let n = 0; n < 4; n++) {
+    osc[n] = audio.createOscillator(); amp[n] = audio.createGain(); amp[n].gain.value = 0;
+    osc[n].connect(amp[n]).connect(scope); osc[n].start();
+    const src = audio.createBufferSource(); src.buffer = noise; src.loop = true;
+    hp[n] = audio.createBiquadFilter(); hp[n].type = 'highpass';
+    hiss[n] = audio.createGain(); hiss[n].gain.value = 0;
+    src.connect(hp[n]).connect(hiss[n]).connect(scope); src.start();
+  }
+}
+function sound() {
+  if (!audio) { m.fill(128, SCOPE, SCOPE + 128); return; }
+  scope.getByteTimeDomainData(wave); for (let i = 0; i < 128; i++) m[SCOPE + i] = wave[2 * i];
+  for (let n = 0; n < 4; n++) {
+    const a = VOICES + 8 * n, f = rd(a), w = WAVES[m[a + 3]] || '';
+    const g = w && f ? (m[a + 2] & 15) / 60 : 0, hissing = w === 'noise';
+    amp[n].gain.value = hissing ? 0 : g; hiss[n].gain.value = hissing ? g : 0;
+    if (w && !hissing && osc[n].type !== w) osc[n].type = w;
+    if (f) { osc[n].frequency.value = f; hp[n].frequency.value = f; }
+  }
+}
+const img = new ImageData(VW, VH), scr = document.getElementById('scr'), ctx = scr.getContext('2d');
+const layer = (w, h) => { const c = document.createElement('canvas'); c.width = w; c.height = h; return c; };
+const chip = layer(VW, VH), soft = layer(VW / 2, VH / 2), lines = layer(1, 1);
+let K = 0;
+let fit = () => {
+  const dpr = window.devicePixelRatio || 1, room = (document.documentElement.clientWidth - 34) * dpr;
+  const k = Math.max(1, Math.min(8, Math.floor(room / VW))); if (k === K) return false; K = k;
+  scr.width = VW * k; scr.height = VH * k; scr.style.width = VW * k / dpr + 'px'; scr.style.height = VH * k / dpr + 'px';
+  lines.height = VH * k; const l = lines.getContext('2d');
+  for (let y = 0; y < VH * k; y++) {
+    const b = k === 1 ? 1 : k === 2 ? (y % 2 ? .82 : 1) : .62 + .38 * Math.sin(Math.PI * (y % k + .5) / k);
+    const v = Math.round(255 * b); l.fillStyle = `rgb(${v},${v},${v})`; l.fillRect(0, y, 1, 1);
+  }
+  return true;
+};
+addEventListener('resize', () => fit());
+let draw = paint => {
+  const w = scr.width, h = scr.height, sc = soft.getContext('2d');
+  if (paint) { compose(new Uint32Array(img.data.buffer)); chip.getContext('2d').putImageData(img, 0, 0);
+    sc.imageSmoothingEnabled = true; sc.drawImage(chip, 0, 0, VW / 2, VH / 2); }
+  ctx.globalCompositeOperation = 'copy'; ctx.imageSmoothingEnabled = false; ctx.drawImage(chip, 0, 0, w, h);
+  ctx.globalCompositeOperation = 'lighter'; ctx.globalAlpha = .2; ctx.imageSmoothingEnabled = true;
+  ctx.drawImage(soft, 0, 0, w, h);
+  ctx.globalAlpha = 1; ctx.globalCompositeOperation = 'multiply'; ctx.drawImage(lines, 0, 0, w, h);
+  ctx.globalCompositeOperation = 'source-over';
+};
+const keyCode = c => c === 59 ? 58 : c === 61 ? 59 : c === 173 ? 61 : c > 185 && c < 193 || c > 218 && c < 223 ? c - 128 : c < 91 || c > 93 && c < 128 ? c : -1;
+const hold = (c, on) => { if (c >= 0) m[KHELD + c] = on ? 255 : 0; woke = true; };
+const letGo = () => { m.fill(0, KHELD, KHELD + 128); woke = true; };
+let ring = k => { const t = m[KTAIL]; if ((t + 1 & 255) !== m[KHEAD]) { m[KRING + t] = k; m[KTAIL] = t + 1; } irq(); };
+let irqDue = false;
+function irq() {
+  woke = true; if (irqDue || !asleep) return; irqDue = true;
+  queueMicrotask(() => { irqDue = false; if (!asleep) return;
+    const end = performance.now() + 3;
+    try { do { const t = performance.now(); slice(2000); ran += performance.now() - t; wr(RUNMS, ran); }
+    while (!slp && IP && performance.now() < end); } catch (e) { say('\nJS error: ' + (e.message || e)); IP = 0; }
+    asleep = slp; draw(true); });
+}
+addEventListener('blur', letGo);
+const fingers = new Map(), pressedIn = [];
+function pointer(e, down) {
+  const r = scr.getBoundingClientRect();
+  let n = e.isPrimary ? 0 : fingers.get(e.pointerId);
+  if (n === undefined) {
+    if (!down) return;
+    n = [1, 2, 3, 4, 5, 6, 7, 8, 9].find(i => ![...fingers.values()].includes(i)); if (!n) return;
+    fingers.set(e.pointerId, n);
+  }
+  const a = POINTERS + 12 * n, press = e.type === 'pointerdown';
+  const x = Math.floor((e.clientX - r.left - scr.clientLeft) * VW / scr.clientWidth);
+  const y = Math.floor((e.clientY - r.top - scr.clientTop) * VH / scr.clientHeight);
+  if (press || pressedIn[n] !== rd(FRAMES)) { wr(a, x); wr(a + 2, y); }
+  m[a + 4] = e.buttons & 7; m[a + 5] = Math.round(e.pressure * 255);
+  m[a + 6] = e.tiltX | 0; m[a + 7] = e.tiltY | 0; wr(a + 8, e.twist | 0);
+  m[a + 11] = { mouse: 1, touch: 2, pen: 3 }[e.pointerType] || 0;
+  if (press) { m[a + 10]++; pressedIn[n] = rd(FRAMES); }
+  if (!down && n) fingers.delete(e.pointerId);
+  woke = true;
+}
+scr.addEventListener('pointerdown', e => { scr.setPointerCapture(e.pointerId); pointer(e, true); setTimeout(soundOn); });
+scr.addEventListener('pointermove', e => pointer(e, e.buttons !== 0));
+scr.addEventListener('pointerup', e => pointer(e, false));
+scr.addEventListener('pointercancel', e => pointer(e, false));
+scr.addEventListener('blur', letGo);
+let roll = 0, wheel = s => wr(WHEEL, rd(WHEEL) + s);
+scr.addEventListener('wheel', e => { e.preventDefault(); roll += e.deltaY * (e.deltaMode ? 100 / 3 : 1);
+  while (Math.abs(roll) >= 100) { const s = Math.sign(roll); wheel(s); roll -= 100 * s; } woke = true; }, { passive: false });
+for (const t of ['mousedown', 'contextmenu', 'selectstart', 'dragstart', 'gesturestart', 'touchstart', 'touchmove', 'dblclick'])
+  scr.addEventListener(t, e => e.preventDefault(), { passive: false });
+</script>
+
+<!-- ======== PART 2: THE GUI, the page around the machine ( it wraps the board, never the other way ) ======== -->
+<script>
+// ==== THE GUI: the page around the machine: the view tabs, the keys' routing, the CODE view,
+// glitter, the frame meter, the programs menu, files and the ROM buttons. It uses the machine
+// and wraps a few of its functions ( fit draw ring wheel textRow cursorAt ); the machine never
+// calls it. Without this script ITCH still runs: go( source ) and frame( 0 ) power it up.
+// Biology: the clothes and the tools: what the body wears and holds, not what it is.
+const outEl = document.getElementById('out'), srcEl = document.getElementById('src'), kbd = document.getElementById('kbd');
+
+// ---- The frame meter, under the screen: where each beat's time goes, to find what is slow on
+// a device. fps and frame: how often the machine really beats; late: beats over 25 ms apart
+// ( the hitches you see ); motors, program and screen: the time each part of a beat takes.
+// If late grows while all three stay small, the slowness is outside ITCH. Also a text copy of
+// all EMIT wrote, for tests and screen readers.
+const METER = true, meterEl = document.getElementById('meter');
+const G = { n: 0, late: 0, mo: 0, pr: 0, sc: 0, last: 0, since: 0 };
+let shown;
+onBeat = (t, mo, pr, sc) => {
+  if (shown !== out) outEl.textContent = (shown = out) + '_';
+  if (!METER) return;
+  if (G.last && t - G.last > 25) G.late++; G.last = t; G.n++; G.mo += mo; G.pr += pr; G.sc += sc;
+  if (!G.since) G.since = t; if (t - G.since < 500) return;
+  const f = n => (n / G.n).toFixed(1);
+  meterEl.textContent = `${Math.round(G.n * 1000 / (t - G.since))} fps · frame ${((t - G.since) / G.n).toFixed(1)} ms · late ${G.late} · motors ${f(G.mo)} · program ${f(G.pr)} · screen ${f(G.sc)} ms`;
+  Object.assign(G, { n: 0, mo: 0, pr: 0, sc: 0, since: t });
+};
+
+// ---- The views. The tabs write the VIEW register ( see the text screen ): PICTURE MIX TEXT
+// CODE; LOG lays the log over the screen ( see the log ). One rule for the keys: TEXT and MIX give them to the prompt ( and open a phone's
+// keyboard ), PICTURE to the game ( live keys ), CODE to the program box, from a tab or a tap on
+// the screen. Touch reaches the picture in all. A key snaps TEXT back to the prompt.
+const tabs = [...document.querySelectorAll('.tab')], VIEWS = ['picture', 'mix', 'text', 'code'];
+const keys = v => (v === 3 ? srcEl : v ? kbd : scr).focus({ preventScroll: true });
+const show = v => { m[VIEW] = looks = v; up = 0; woke = true; if (logEl.hidden) tabs.forEach(t => t.classList.toggle('on', t.dataset.view === VIEWS[v])); };
+tabs.forEach(t => t.addEventListener('click', () => {
+  if (t.dataset.view === 'log') { logEl.hidden = false; logShown = ''; tabs.forEach(u => u.classList.toggle('on', u === t)); kbd.focus({ preventScroll: true }); return; }
+  logEl.hidden = true; const v = VIEWS.indexOf(t.dataset.view); show(v); keys(v); }));
+const typing = e => e.target === srcEl || e.target.tagName === 'SELECT';
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') { brk = true; e.preventDefault(); return; }   // BREAK, from anywhere
+  if (typing(e)) return;
+  setTimeout(soundOn); woke = true;                  // the key first, then the sound chip powers up
+  if (e.target === kbd) { if (e.key.length > 1 && e.key !== 'Enter' && e.key !== 'Backspace') e.preventDefault(); return; }
+  if (document.activeElement === scr) { hold(keyCode(e.keyCode), true); if (!e.ctrlKey && !e.metaKey) e.preventDefault(); return; }
+  if (e.key === 'Enter' || e.key === 'Backspace') { ring(e.key === 'Enter' ? 13 : 8); e.preventDefault(); }
+  else if ([...e.key].length === 1) { type(e.key); e.preventDefault(); }   // one letter, as its UTF-8 bytes
+});
+document.addEventListener('keyup', e => { hold(keyCode(e.keyCode), false); if (e.key === 'Meta') letGo(); });
+const boardRing = ring; ring = k => { up = 0; boardRing(k); };
+const type = t => { for (const b of utf8in.encode(t)) ring(b === 10 ? 13 : b); };   // text into the ring, as UTF-8 bytes
+// Phone keyboards: TEXT or MIX focuses a hidden text field, which opens the keyboard. Its text
+// reaches the ring as it changes: a word a phone is still composing is followed letter by
+// letter, and the space in front makes Backspace felt even when nothing is typed. Pasting too.
+let typed = []; kbd.value = ' ';
+kbd.addEventListener('input', e => {
+  setTimeout(soundOn);
+  if (kbd.value[0] !== ' ') { ring(8); kbd.value = ' '; typed = []; return; }   // Backspace
+  const v = [...kbd.value.slice(1)]; let i = 0;                // letters, not UTF-16 halves
+  while (i < typed.length && typed[i] === v[i]) i++;           // what is still the same
+  for (let j = typed.length; j > i; j--) ring(8);              // take back what changed ( ACCEPT rubs whole letters )
+  type(v.slice(i).join(''));                                   // and type the new
+  typed = v; if (!e.isComposing) { kbd.value = ' '; typed = []; }
+});
+kbd.addEventListener('compositionend', () => { kbd.value = ' '; typed = []; });
+// A tap on the screen gives the keys by the view's rule ( in CODE it also places the caret ).
+// In TEXT and CODE the wheel ( 3 rows a step ) and a drag ( a row at a time ) scroll: TEXT back
+// through the rows gone by, CODE through the program. In PICTURE and MIX they go to the program.
+scr.addEventListener('pointerdown', e => { keys(m[VIEW]); if (m[VIEW] === 3) tap(e); });
+const look = n => { if (m[VIEW] === 3) from = Math.max(0, Math.min(rows.length - 25, from - n));
+  else up = Math.max(0, Math.min(kept.length, up + n)); woke = true; };
+const boardWheel = wheel; wheel = s => m[VIEW] > 1 ? look(-3 * s) : boardWheel(s);
+let dragY = 0;
+scr.addEventListener('pointermove', e => { if (m[VIEW] < 2 || !e.buttons) return dragY = e.clientY;
+  const h = scr.clientHeight / 25, n = Math.trunc((e.clientY - dragY) / h); if (n) { look(n); dragY += n * h; } });
+
+// ---- THE CODE VIEW: the program box on the text screen, 40 columns, in colour. The box keeps
+// the focus and does all the editing ( keys, arrows, selection, paste, undo ); the screen only
+// shows it and follows its caret, which a tap puts where it lands.
+// Its colours replay ITCH's own reader. Which loop reads a word ( INTERPRET runs it now, ]
+// compiles it for later ) and the word's side ( the header bits in the live dictionary, or
+// what the program itself defines ) say when the word acts, and that time is its colour:
+//   red: a name is born   yellow: now ( a number: orange )   green: later ( a number: light green )
+//   purple: later, in each child ( after DOES> )   cyan: later still ( POSTPONE )
+//   light blue: a DEFER word ( its action is plugged in later; found by its parent field )
+//   grey: never ( comments )   light grey: a string's text   white: a word ITCH does not know
+//   inverse pink: ITCH would refuse it here
+// A word that reads the next one ( ' IS POSTPONE VARIABLE ... ) only does so when it runs now.
+const BIRTH = new Set([':', 'CREATE', 'VARIABLE', 'CONSTANT', 'VALUE', 'DEFER', 'VOCABULARY', 'MARKER', 'TASK', 'CLONE', 'FIELD']);
+const BREED = ['KIND'];                              // built-in words whose children make names
+const AHEAD = new Set(["'", "[']", 'POSTPONE', '[COMPILE]', 'IS', '[IS]', 'TO', '[TO]', 'CHAR', '[CHAR]', 'SEE']);
+const BUILDS = 0x40, BOTH = 0x80;                    // the side bits ( see SIDES in the notes )
+let names = new Map(), deferred = new Set(), namesAt = -1;
+function sides() {                                   // name -> side, read from the dictionary when it grows,
+  if (namesAt === rd(DP)) return names; names = new Map(); deferred = new Set(); namesAt = rd(DP);
+  const heads = [];                                  // and which words DEFER made: their parent field ( xt + 10 )
+  for (let h = rd(LATEST); h; h = rd(h)) { let s = ''; for (let i = 0; i < (m[h + 2] & 31); i++) s += String.fromCharCode(m[h + 3 + i]);
+    if (!names.has(s)) { names.set(s, m[h + 2] & 0xC0); heads.push([s, cfa(h)]); } }
+  const defer = (heads.find(([s]) => s === 'DEFER') || [])[1];
+  for (const [s, xt] of heads) if (rd(xt + 2) === xtLIT && rd(xt + 4) === xt + 12 && rd(xt + 10) === defer) deferred.add(s);
+  return names;
+}
+const isNum = (w, base) => /^'.'$/.test(w) || /^-?[0-9A-Z]+$/.test(w) && [...w.replace(/^-/, '')].every(d => parseInt(d, 36) < base);
+function inks(t, dict, late = new Set()) {           // the colour of every character of t
+  const ink = new Uint8Array(t.length).fill(3), born = new Map(), word = /\S+/g, sockets = new Set(late);
+  const makers = new Set([...BIRTH, ...BREED]), breeders = new Set(BREED);   // words that make names ( a word that compiles one is one
+                                                     // too ); breeders: their children make names ( KIND )
+  let build = false, life = false, base = 10, ahead = 0, aheadInk = 7, last = '', defining = '', mt;
+  while ((mt = word.exec(t))) {
+    const w = mt[0], j = mt.index;
+    let c;
+    if (ahead) {                                     // the word a reader reads: a name, or data
+      c = ahead === 1 ? 10 : sockets.has(w) ? 14 : aheadInk;
+      if (ahead === 1) { born.set(last = w, 0); makers.delete(w); if (breeders.has(defining)) makers.add(w);
+        if (defining === 'DEFER') sockets.add(w); else sockets.delete(w); }
+      ahead = 0;
+    } else if (w === '\\' || w === '(') {            // a comment, to the line's end or to )
+      const e = w === '(' ? t.indexOf(')', j + 1) + 1 : t.indexOf('\n', j);
+      const end = e > 0 ? e : t.length; ink.fill(12, j, end); word.lastIndex = end; continue;
+    } else if (w === ':' || w === ':NONAME') { c = 10; build = true; life = false; ahead = w === ':' ? 1 : 0; defining = w;
+    } else if (w === ';') { c = 10; build = life = false;
+    } else if (w === '[' || w === ']') { c = 7; build = w === ']';
+    } else {
+      const side = born.has(w) ? born.get(w) : dict.has(w) ? dict.get(w) : -1;
+      const now = !build || side === BUILDS || side === BOTH;   // does it act while being read?
+      if (side < 0) c = isNum(w, base) ? build ? life ? 4 : 13 : 8 : 1;   // a number, now or compiled; or unknown
+      else if (!build && (side === BUILDS || side === BUILDS + BOTH)) c = 10 | 128;   // refused here
+      else c = sockets.has(w) ? 14 : now ? 7 : life ? 4 : 5;
+      if (!now && makers.has(w) && w !== ':' && born.has(last)) (life ? breeders : makers).add(last);   // CREATE compiled
+      if (now) {                                     // what it changes in the reading
+        if (w === 'HEX') base = 16; else if (w === 'DECIMAL') base = 10; else if (w === 'DOES>') life = true;
+        else if ((w === 'BUILDER' || w === 'IMMEDIATE') && born.has(last)) born.set(last, w === 'BUILDER' ? BUILDS : BOTH);
+        else if (makers.has(w)) { ahead = 1; defining = w; }
+        else if (AHEAD.has(w)) { ahead = 2; aheadInk = w === 'POSTPONE' ? 3 : w === '[COMPILE]' ? 5 : c; }
+      }
+      if (/"$/.test(w) || w === '.(') {              // a string: its text, light blue, to " or )
+        const e = t.indexOf(w === '.(' ? ')' : '"', j + w.length + 1), end = e < 0 ? t.length : e + 1;
+        ink.fill(c, j, j + w.length); ink.fill(15, j + w.length, end); word.lastIndex = end; continue;
+      }
+    }
+    ink.fill(c, j, j + w.length);
+  }
+  return ink;
+}
+const page = new Uint8Array(2000); let rows = [], from = 0, at = -1, caret = [0, 0], seen = '';   // characters, colours
+function paged() {                                   // only when the text, caret, scroll, focus or dictionary changed
+  const now = [srcEl.value.length, srcEl.selectionStart, srcEl.selectionEnd, from, document.activeElement === srcEl, rd(DP), srcEl.value].join();
+  if (now === seen) return; seen = now;
+  const t = srcEl.value, a0 = srcEl.selectionStart, a1 = srcEl.selectionEnd, ink = inks(t, sides(), deferred); rows = [];
+  const a = srcEl.selectionDirection === 'backward' ? a0 : a1;   // the end of a selection the caret is at
+  let i = 0; for (const l of t.split('\n')) {       // 40 columns; a full row gets an empty one after it, for the caret
+    for (let c = 0; c <= l.length; c += 40) rows.push([i + c, Math.min(40, l.length - c)]); i += l.length + 1; }
+  let r = rows.length - 1; while (r && rows[r][0] > a) r--;
+  if (a !== at) { at = a; from = Math.min(r, Math.max(from, r - 24)); }   // the caret moved: keep it in view
+  page.fill(32, 0, 1000);
+  for (let y = 0; y < 25 && from + y < rows.length; y++) { const [s, n] = rows[from + y];
+    for (let x = 0; x < n; x++) { const j = s + x, k = t.charCodeAt(j);   // a control character shows as a space,
+      page[y * 40 + x] = k < 32 ? 32 : k > 126 ? 63 : k;                   // one with no tile ( å, ö ) as an inverse ?
+      page[1000 + y * 40 + x] = ink[j] ^ (k > 126 || j >= a0 && j < a1 ? 128 : 0); } }   // and the selection inverse
+  caret = document.activeElement === srcEl ? [a - rows[r][0], r - from] : [-1, -1];   // no focus, no cursor
+}
+function tap(e) {                                    // the caret goes where the screen is tapped
+  const b = scr.getBoundingClientRect(), x = Math.floor((e.clientX - b.left - scr.clientLeft) * 40 / scr.clientWidth);
+  const row = rows[Math.min(from + Math.floor((e.clientY - b.top - scr.clientTop) * 25 / scr.clientHeight), rows.length - 1)];
+  if (row) { const i = row[0] + Math.min(x, row[1]); srcEl.setSelectionRange(i, i); }
+}
+const chipRow = textRow, chipCursor = cursorAt;      // in CODE the text layer shows the page
+textRow = r => m[VIEW] === 3 ? [page, r * 40, 1000 + r * 40, r] : chipRow(r);
+cursorAt = () => m[VIEW] === 3 ? caret : chipCursor();
+for (const ev of ['input', 'focus', 'blur']) srcEl.addEventListener(ev, () => { woke = true; if (m[VIEW] === 3) draw(true); });
+document.addEventListener('selectionchange', () => { if (m[VIEW] === 3) { woke = true; still = m[0xD802]; draw(true); } });   // at once
+
+// ---- The log: everything EMIT writes, decoded as UTF-8 at the door, kept for the whole
+// session ( PAGE does not clear it; each RUN starts with a line ), shown as plain web text by
+// the LOG tab: every language, select and copy, long listings, the profiler's lines. The retro
+// screen shows the same bytes, one cell each. Forth knows nothing of it: EMIT is unchanged.
+// With CONSOLE on, every finished line also goes to the browser's developer console, and what
+// the page tells that console ( messages, warnings, errors ) comes into the tab too, marked ▸.
+// Biology: memory: the screen is what the eye sees now, the log what the mind keeps.
+const logEl = document.getElementById('log'), utf8 = new TextDecoder();
+let logged = '', logShown = '', line = '', rub = 0;
+const CONSOLE = true, said = console.log.bind(console);   // each finished line also into the browser's log ( F12 )
+const log = t => { logged = (logged + t).slice(-200000);
+  if (CONSOLE) for (const ch of t) if (ch === '\n') { if (line) said(line); line = ''; } else line += ch; };
+// The other way: what the page itself tells the browser's log ( messages, warnings, errors )
+// still goes there as always, and a copy comes into the tab, marked with its kind.
+for (const kind of ['log', 'info', 'warn', 'error']) { const real = console[kind].bind(console);
+  console[kind] = (...a) => { real(...a); logged = (logged + `\n\u25B8 ${kind}: ${a.join(' ')}\n`).slice(-200000); }; }
+addEventListener('error', e => console.error(`${e.message} ( line ${e.lineno} )`));
+addEventListener('unhandledrejection', e => console.error(String(e.reason)));
+const chipEmit2 = emit; emit = c => { chipEmit2(c);   // every byte also into the log
+  if (c === 8) {                                     // a letter goes once all its bytes are rubbed
+    const u = logged.charCodeAt(logged.length - 1), pair = u >= 0xDC00 && u < 0xE000;
+    if (++rub >= (pair ? 4 : u < 0x80 ? 1 : u < 0x800 ? 2 : 3)) { const k = pair ? 2 : 1; rub = 0; logged = logged.slice(0, -k); line = line.slice(0, -k); }
+    return; }
+  rub = 0;
+  if (c === 10 || c === 13 || c === 12) log(utf8.decode() + '\n');
+  else if (c >= 32) log(utf8.decode(Uint8Array.of(c), { stream: true })); };
+const boardGo = go; go = program => { log(utf8.decode() + '\n\u2500\u2500\u2500\u2500 RUN ' + ((program.match(/^\\ ==== ([^:=]+)/) || [, ''])[1].trim()) + '\n'); boardGo(program); };
+const boardBeat = onBeat; onBeat = (...a) => { boardBeat(...a);
+  if (logEl.hidden || logShown === logged) return;
+  const end = logEl.scrollHeight - logEl.scrollTop - logEl.clientHeight < 40;   // at the bottom: follow it
+  logEl.textContent = logShown = logged; if (end) logEl.scrollTop = logEl.scrollHeight; };
+
+// ---- Glitter: glints of light that catch on the text's characters, mostly near the cursor,
+// like light on a phosphor screen ( the monitor's glow is its bloom ). A new glint every 8
+// frames, each lives 27 ( it flares, turns and fades ), drawn on the glass over everything.
+const GLITTER = true;                                // on or off
+const spark = layer(1, 1); let glints = [];
+function glitter() {
+  const f = rd(FRAMES), v = m[VIEW], k = K * 8, n = spark.width;
+  const age = g => f - g.f & 0xFFFF;                 // in frames; a reset ( FRAMES back to 0 ) makes it huge
+  glints = glints.filter(g => age(g) < 27);
+  const cy = Math.max(0, Math.min(24, cursorAt()[1] + (v === 2 ? up : 0)));   // the cursor's row, as shown
+  for (let tries = v && !(f % 8) ? 20 : 0; tries; tries--) {   // a lit character ( PICTURE: no text, no glints )
+    const y = cy - Math.floor(Math.random() ** 2 * (cy + 1)), x = Math.floor(Math.random() * 40), [ch, c0] = textRow(y);
+    if (ch[c0 + x] !== 32) { glints.push({ x, y, f }); break; }
+  }
+  ctx.globalCompositeOperation = 'lighter';
+  for (const g of glints) {
+    const t = age(g) / 27, rise = t < .35, u = rise ? t / .35 : (t - .35) / .65;   // flare, then fade
+    ctx.globalAlpha = rise ? u : 1 - u;
+    ctx.setTransform(1, 0, 0, 1, (g.x + .5) * k, (g.y + .5) * k);
+    ctx.rotate((rise ? 20 * u : 20 + 25 * u) * Math.PI / 180); const z = rise ? .2 + .95 * u : 1.15 - .65 * u; ctx.scale(z, z);
+    ctx.drawImage(spark, -n / 2, -n / 2);
+  }
+  ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.globalAlpha = 1; ctx.globalCompositeOperation = 'source-over';
+}
+const boardFit = fit; fit = () => {                  // the page column as wide as the screen, and a glint sized to it
+  if (!boardFit()) return false;
+  document.documentElement.style.setProperty('--w', scr.width / (window.devicePixelRatio || 1) + 2 + 'px');
+  const n = spark.width = spark.height = 14 * K, g = spark.getContext('2d'), r = n / 2;   // a star of light
+  const glow = g.createRadialGradient(r, r, 0, r, r, r * .7), ray = g.createLinearGradient(0, 0, n, 0);
+  for (const [o, c] of [[.2, '#fff'], [.35, '#fffb'], [.65, '#a0ffa059'], [1, '#a0ffa000']]) glow.addColorStop(o, c);
+  for (const [o, c] of [[.15, '#fff0'], [.5, '#fff'], [.85, '#fff0']]) ray.addColorStop(o, c);
+  g.fillStyle = glow; g.fillRect(0, 0, n, n); g.fillStyle = ray;   // the halo, then two rays crossed
+  g.fillRect(0, r - K / 2, n, K); g.translate(r, r); g.rotate(Math.PI / 2); g.translate(-r, -r); g.fillRect(0, r - K / 2, n, K);
+  return true;
+};
+const boardDraw = draw; draw = paint => {            // CODE's page before the picture, glints after it
+  if (paint && m[VIEW] === 3) paged();
+  boardDraw(paint);
+  if (GLITTER) glitter();
+  if (m[VIEW] !== looks) show(m[VIEW]);              // Forth changed the view: the tabs follow
+};
+
+// ---- Programs: drop .fs files on the page, or Load .fs. A file splits into programs at each
+// title line ( \\ ==== NAME: ... ); each joins the menu, and the first one runs. A file with no
+// title is one program, named after the file. Save .fs writes the program box to a file.
+// The browser keeps the menu, so loaded programs are still there after a reload.
+const menu = document.getElementById('demo'), programs = { hello: srcEl.value };
+function remember(name, t) {                         // one program into the menu
+  const m = t.match(/^\\ ==== ([^:=]+)/);
+  if (!(name in programs)) { const o = document.createElement('option'); o.value = name; o.textContent = (m ? t.split('\n')[0].slice(7).replace(/ =+$/, '') : name).toLowerCase(); menu.appendChild(o); }
+  programs[name] = t;
+}
+function addPrograms(text, file) {
+  const parts = text.split(/^(?=\\ ==== )/m).filter(t => t.trim()); let first;
+  if (parts.length > 1 && !/^\\ ==== /.test(parts[0])) parts.splice(0, 2, parts[0] + parts[1]);   // a preface joins the first
+  for (const t of parts) {
+    const m = t.match(/^\\ ==== ([^:=]+)/), name = (m ? m[1] : file.replace(/\.\w+$/, '')).trim().toLowerCase();
+    remember(name, t); first = first || name;
+  }
+  try { localStorage.setItem('itch-programs', JSON.stringify(programs)); } catch (e) {}   // kept for next time
+  if (first) { menu.value = first; put(programs[first]); }
+}
+try { const kept = JSON.parse(localStorage.getItem('itch-programs')) || {}; for (const n in kept) if (n !== 'hello') remember(n, kept[n]); } catch (e) {}
+const readFiles = files => [...files].forEach(f => f.text().then(t => addPrograms(t, f.name)));
+const put = t => { srcEl.value = t; srcEl.setSelectionRange(0, 0); go(t); };   // a program into the box, the caret at its start, run
+menu.addEventListener('change', e => { put(programs[e.target.value]); e.target.blur(); });
+document.getElementById('fs').addEventListener('change', e => { readFiles(e.target.files); e.target.value = ''; });
+addEventListener('dragover', e => e.preventDefault());
+addEventListener('drop', e => { e.preventDefault(); readFiles(e.dataTransfer.files); });
+const download = (name, blob) => { const a = document.createElement('a'); a.download = name; a.href = URL.createObjectURL(blob); a.click(); };
+function save_fs() {                                 // the program box as a file, named by its title
+  const m = srcEl.value.match(/^\\ ==== ([^:=]+)/);
+  download((m ? m[1].trim().toLowerCase() : 'program') + '.fs', new Blob([srcEl.value], { type: 'text/plain' }));
+}
+function save_rom() { download('itch.rom', new Blob([ROM])); }   // the grown system as a file
+document.getElementById('rom').addEventListener('change', async e => {
+  const f = e.target.files[0]; if (f) boot_rom(new Uint8Array(await f.arrayBuffer())); e.target.value = '';
+});
+
+// ---- Power on ----
+fit(); go(srcEl.value); show(looks); frame(performance.now());
+sheet.decode().then(() => draw(true), () => {});    // the tile sheet ( the font ) arrives a moment later
+</script>
+</body>
+</html>
