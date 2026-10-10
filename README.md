@@ -6,7 +6,8 @@
 * **Location:** Uppsala, Sweden
 * **Date:** October 2026
 
-![ITCH running in the browser](docs/learnForth.png)
+![Learn Forth](docs/learnForth.png)
+![ITCH running in the browser](docs/ITC.png)
 
 ---
 
