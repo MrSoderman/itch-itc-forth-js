@@ -1,73 +1,117 @@
-# TRUE ITC FORTH IN 256 LOC v 0.8
+# ITCH
+
+**A real, authentic Indirect Threaded Code (ITC) Forth, written in simple JavaScript, small enough to read in one sitting.**
 
 * **Author:** Jimmy Söderman
 * **Location:** Uppsala, Sweden
 * **Date:** October 2026
 
----
-
-## Overview
-
-This repository contains a true Indirect Threaded Code (ITC) Forth engine and core written in a remarkably compact codebase (active parts JavaScript + Forth Core words = totally 256 LOC) plus modules. Although modeled on a 16-bit architecture, the engine can be easily configured to support 64-bit cells over its flat memory bus.
+![ITCH running in the browser](docs/learnForth.png)
 
 ---
 
-## Key Features
+## What is this?
 
-* **Compact & Efficient:** Consists of 35 core primitives (also exists in 26 primitives and a few more).
-* **True ITC Architecture:** Implements core Forth primitives, control flow, dictionary management, and an inner/outer interpreter.
-* **Graphical Screen:** Features a 128x96 byte color screen (colors 0–15) mapped at `C000h`, complete with hardware-level Bresenham line drawing and a 60 Hz VBLANK loop.
-* **Interactive Development Environment:** Includes a built-in text editor, a live REPL console (`OK>` prompt), and execution controls (`RUN`, `STOP`, `CLEAR`).
-* **Visual Explorer:** An optional `EXPLORE` tool that lets you inspect the dictionary in real-time, step through execution, and monitor data and return stacks.
-* **Inline JavaScript Integration:** Includes optional host API hooks allowing `JS[...]JS` code execution.
+ITCH is a true ITC Forth whose active parts (JavaScript engine + Forth core words) fit in **128–256 lines of code**.
 
----
+The idea is Alan Kay's: he described the half page of LISP that defines LISP itself as the "Maxwell's equations of software". ITCH tries to do the same for Forth. It aims for a small core where you can see everything, and everything else is built from it.
 
-## The Forth-in-Non-Forth to Forth-in-Forth Journey
+**JavaScript is the BASIC of today.** Everyone has it, it runs everywhere, and you need nothing but a browser. So the engine is written in plain, flat JavaScript that maps 1:1 to low-level code. You could translate it line by line into assembly, machine code or BASIC.
 
-This system achieves a true "Forth-in-Forth" (metacircular) state through a precise bootstrap sequence where the outer interpreter is ultimately written in Forth words.
-
-### Boot Sequence
-* **Primitives:** Defined in the underlying substrate (JavaScript, assembly, or hardware).
-* **Inner Interpreter:** Defined in the underlying substrate (JavaScript, Asm, or Hardware, etc.). This is the well-known `NEXT` loop (referred to here as `STEP`), which traditionally never knows of any compiling or interpretation modes and just does its job blindly.
-* **Outer Interpreter Seed:** A temporary seed defined in the underlying substrate used just for a brief moment.
-* **Core Words Loading:** Core words are read in using the seed, providing high-level words built from the primitives.
-* **Self-Hosting Transition:** Once core words are loaded, there are enough words to express the outer interpreter as high-level Forth words, allowing the temporary seed to be discarded.
-
-The system is now fully Forth-in-Forth, metacircular, and self-hosting.
+**Simple ITC in simple source code.**
 
 ---
 
-## Architecture & The Virtual Machine (VM)
+## Why?
 
-### 1:1 Architecture
-Designed with a clean 1:1 structural layout mirroring low-level procedural code, making it exceptionally simple for JavaScript and web developers to understand, translate, or port directly into assembly, machine code, or BASIC environments.
+* **To teach Forth.** It shows how Forth really works, starting from the bare machine.
+* **To be a proper Forth.** It's not a "fake Forth" that only looks like Forth on the surface. Everything builds everything, like LEGO.
+* **To stay bare-metal.** It has no objects and no `EVALUATE` tricks. Registers, memory and stacks are laid out the way a real machine would have them.
 
-### The VM Components
-* **The Primitives:** The base opcodes of the system.
-* **The Inner Interpreter:** Acts like a normal CPU core (`STEP`), completely unaware of states, compiling, or interpretation, executing primitives blindly.
-* **The Environment:** The underlying hardware-like operational state containing:
-  * `SP`: Data Stack
-  * `RP`: Return Stack
-  * `IP`: Instruction Pointer
-  * `W`: Working Register (ITC-Specific) — required by ITC to track active word addresses for execution handlers like `DOCOL` and `DOCREATE`/`DOES>`.
+The best building blocks in Forth do the heavy lifting here:
 
-### PDP-11 Architectural Kinship
-True to the spirit of classical minicomputers like the PDP-11, this engine uses a pristine Indirect Threaded Code (ITC) design, explicit hardware-style registers (`IP`, `W`, `SP`, `RP`), and a flat memory model to achieve clean, orthogonal execution both conceptually and in its software implementation.
+| Word pair | What it gives you |
+|-----------|-------------------|
+| `CREATE ... DOES>` | New kinds of words: defining words that make defining words |
+| `DEFER ... IS` | Late binding: change behaviour after the fact, without rewriting code |
+
+ITCH covers these properly, in a minimum of code.
 
 ---
 
-## How to Run
+## The three steps
 
-1. Extract the files from your ZIP archive.
-2. Double-click or open `itc-baremetal.html` in any modern web browser (Chrome, Firefox, Safari, Edge).
-3. No compilation, servers, or local installations are required!
+The project is a learning path. Each step builds on the one before.
+
+```
+  1. Forth-in-Stone   →   2. True ITC   →   3. ITCH
+     (learn)                (understand)        (experiment)
+```
+
+### 1. Forth-in-Stone: learn how Forth works
+
+📁 `forth-in-stone/`
+
+This is a tiny Forth with very few words, built around `CREATE DOES>` and `DEFER IS`. It comes with a **PDF guide** that walks you through how Forth works and how it grows its magic. The interpreter comes first. Then the compiler is written in Forth itself.
+
+Start here if you are new to Forth.
+
+### 2. True ITC: a complete, classic ITC Forth
+
+📁 `true-itc/`
+
+This is a complete Indirect Threaded Code Forth in about 256 lines, modeled on a 16-bit machine.
+
+* **35 core primitives.** There is also a 26-primitive variant.
+* **Real ITC machine.** It has explicit registers `IP`, `W`, `SP` and `RP` and a flat memory bus. It can be configured for 64-bit cells.
+* **Inner interpreter.** `STEP`, the classic `NEXT` loop, works like a CPU core. It knows nothing about compiling or interpreting. It just executes.
+* **Graphics.** It has a 128×96 screen with 16 colors mapped at `C000h`, hardware-style Bresenham line drawing and a 60 Hz VBLANK loop.
+* **IDE.** It includes an editor, a live REPL (`OK>`), and `RUN` / `STOP` / `CLEAR` controls.
+* **EXPLORE.** This optional visual debugger lets you inspect the dictionary, step through execution and watch both stacks.
+* **Inline JavaScript.** Optional `JS[ ... ]JS` hooks let you call the host.
+
+#### From Forth-in-JavaScript to Forth-in-Forth
+
+The system boots its way into being metacircular:
+
+1. **Primitives** are written in the substrate (JavaScript here; assembly or hardware elsewhere).
+2. **The inner interpreter** (`STEP`) is written in the substrate.
+3. **A temporary outer-interpreter seed** is written in the substrate. It is used only for a moment.
+4. **Core words** are loaded through that seed.
+5. **The seed is discarded.** The outer interpreter is now written in Forth words.
+
+From then on the system is **Forth-in-Forth: metacircular and self-hosting.**
+
+The design is in the spirit of the PDP-11. It uses clean registers, a flat memory model and orthogonal execution.
+
+### 3. ITCH: the working project
+
+📁 `itch/`
+
+This is where new ideas are tested first. ITCH is an **optimized ITC** that aims to be even smaller, with more "biological" connections between its parts. It is the ground that will later grow into **ForthScript**.
+
+Expect this part to change often.
 
 ---
 
-## Usage & Controls
+## How to run
 
-* **Editor:** Modify or write your Forth programs directly in the text editor area, then click **RUN** to execute.
-* **REPL Console:** Type individual Forth commands directly into the prompt (`OK>`).
-* **Explorer:** Click the **EXPLORE** button to open the interactive debugger/inspector view, where you can step through code execution line by line.
-* **Shortcuts:** Press `Ctrl + Enter` (or `Cmd + Enter`) to quickly run the program from the editor.
+1. Clone or download the repository.
+2. Open the `.html` file of the step you want in any modern browser (Chrome, Firefox, Safari, Edge).
+3. You don't need to compile anything, run a server or install anything.
+
+## Controls
+
+* **Editor:** Write Forth in the editor and press **RUN**, or `Ctrl+Enter` / `Cmd+Enter`.
+* **REPL:** Type commands directly at the `OK>` prompt.
+* **EXPLORE:** Open the inspector to step through execution and watch the stacks.
+
+---
+
+## Philosophy
+
+> Small enough to understand completely. Real enough to build anything.
+
+* No standard is chased for its own sake. Only good ideas that remove noise are kept.
+* A word becomes a primitive only if it really has to be one.
+* Everything is written to be read, learned from and ported.
