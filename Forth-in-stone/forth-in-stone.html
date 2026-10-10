@@ -80,6 +80,9 @@ DEFER GREET  : HI 1 . ;  : BYE 2 . ;  : FLIP ['] BYE [IS] GREET ;
 : ZERO? ( n -- )  0 = IF 1 ELSE 2 THEN . ;   0 ZERO?  5 ZERO?  CR   \ 1 2
 : COUNTDOWN ( n -- )  BEGIN DUP . 1 - DUP 0 = UNTIL DROP ;   5 COUNTDOWN  CR
 : NAMED ( name -- ) (CREATE) 0 , ;   S" V" 1 + NAMED   9 V1 !  V1 @ .  CR   \ 9
+\ Words that make words that make words: MAKER's children are makers too ( nested DOES> ).
+: MAKER ( n "name" -- )  CREATE , DOES> CREATE @ , DOES> @ 100 + ;
+7 MAKER FAMILY   FAMILY KID   KID .  CR                \ 107: KID got 7 from FAMILY, plus 100
 </script>
 
 <script type="text/forth" id="mirror">
