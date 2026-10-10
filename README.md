@@ -2,6 +2,8 @@
 
 **A real, authentic Indirect Threaded Code (ITC) Forth, written in simple JavaScript, small enough to read in one sitting.**
 
+# An Authentic ITC Metacircular Forth in 128 Simple Lines of JavaScript
+
 * **Author:** Jimmy Söderman
 * **Location:** Uppsala, Sweden
 * **Date:** October 2026
