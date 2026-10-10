@@ -10,9 +10,23 @@
 
 ---
 
+## Three folders, one path
+
+| | Folder | What it is |
+|---|--------|------------|
+| **1. Learn** | `Forth-in-Stone/` | **Learn what Forth is.** This is a clever, tiny Forth with a guide PDF. Start here. |
+| **2. Understand** | `True-ITC/` | **The textbook.** It is an authentic, classic ITC Forth in about 128 lines, written plainly enough to read like BASIC or assembly in 6502 or x64 style. |
+| **3. Explore** | `ITCH/` | **The main project.** |
+
+**ITCH stands for *ITC Hardware*.** It isn't about building chips. It's about the idea that an indirect-threaded Forth has qualities of its own that native Forths such as STC or MachineForth may not have. Those qualities include late binding, density, and a machine you can see and walk through.
+
+ITCH starts from the textbook and asks what is possible. It aims to be simpler, more efficient and more direct, and maybe even native in places. The answers aren't settled yet, and that's the point.
+
+---
+
 ## What is this?
 
-ITCH is a true ITC Forth whose active parts (JavaScript engine + Forth core words) fit in **128–256 lines of code**.
+The textbook core (JavaScript engine + Forth core words) fits in **128–256 lines of code**.
 
 The idea is Alan Kay's: he described the half page of LISP that defines LISP itself as the "Maxwell's equations of software". ITCH tries to do the same for Forth. It aims for a small core where you can see everything, and everything else is built from it.
 
@@ -43,24 +57,19 @@ ITCH covers these properly, in a minimum of code.
 
 The project is a learning path. Each step builds on the one before.
 
-```
-  1. Forth-in-Stone   →   2. True ITC   →   3. ITCH
-     (learn)                (understand)        (experiment)
-```
-
 ### 1. Forth-in-Stone: learn how Forth works
 
-📁 `forth-in-stone/`
+📁 `Forth-in-Stone/`
 
 This is a tiny Forth with very few words, built around `CREATE DOES>` and `DEFER IS`. It comes with a **PDF guide** that walks you through how Forth works and how it grows its magic. The interpreter comes first. Then the compiler is written in Forth itself.
 
 Start here if you are new to Forth.
 
-### 2. True ITC: a complete, classic ITC Forth
+### 2. True ITC: the textbook
 
-📁 `true-itc/`
+📁 `True-ITC/`
 
-This is a complete Indirect Threaded Code Forth in about 256 lines, modeled on a 16-bit machine.
+This is a complete Indirect Threaded Code Forth in about 128 lines of core (256 with modules), modeled on a 16-bit machine.
 
 * **35 core primitives.** There is also a 26-primitive variant.
 * **Real ITC machine.** It has explicit registers `IP`, `W`, `SP` and `RP` and a flat memory bus. It can be configured for 64-bit cells.
@@ -84,11 +93,11 @@ From then on the system is **Forth-in-Forth: metacircular and self-hosting.**
 
 The design is in the spirit of the PDP-11. It uses clean registers, a flat memory model and orthogonal execution.
 
-### 3. ITCH: the working project
+### 3. ITCH: the main project
 
-📁 `itch/`
+📁 `ITCH/`
 
-This is where new ideas are tested first. ITCH is an **optimized ITC** that aims to be even smaller, with more "biological" connections between its parts. It is the ground that will later grow into **ForthScript**.
+This is where ideas are tested first. ITCH explores how small, direct and efficient an ITC Forth can become, with more "biological" connections between its parts. It is the ground that will later grow into **ForthScript**.
 
 Expect this part to change often.
 
