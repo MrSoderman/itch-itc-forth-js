@@ -27,7 +27,7 @@ ITCH starts from the textbook and asks what is possible. It aims to be simpler, 
 
 ## What is this?
 
-The textbook core (JavaScript engine + Forth core words) fits in **128–256 lines of code**.
+The textbook core (JavaScript engine + Forth core words) fits in **128 lines of code (256 if you count the Forth code)**.
 
 The idea is Alan Kay's: he described the half page of LISP that defines LISP itself as the "Maxwell's equations of software". ITCH tries to do the same for Forth. It aims for a small core where you can see everything, and everything else is built from it.
 
@@ -70,7 +70,7 @@ Start here if you are new to Forth.
 
 📁 `True-ITC/`
 
-This is a complete Indirect Threaded Code Forth in about 128 lines of core (256 with modules), modeled on a 16-bit machine.
+This is a complete Indirect Threaded Code Forth in about 128 lines of core (256 with Forth code), modeled on a 16-bit machine.
 
 * **35 core primitives.** There is also a 26-primitive variant.
 * **Real ITC machine.** It has explicit registers `IP`, `W`, `SP` and `RP` and a flat memory bus. It can be configured for 64-bit cells.
