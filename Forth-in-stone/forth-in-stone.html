@@ -25,6 +25,10 @@ code words a 6502 could run; and a screen, keys, sound, tasks and checks for mis
 \ word's body, one cell at a time ( NEXT ). The OUTER one reads this text: it takes a
 \ token, finds it and runs it, or turns it into a number. That is all Forth can do yet:
 \ run words. It cannot make new ones: there is no : and no ; .
+</script>
+
+<script type="text/forth" id="stone-demo">
+\ ---- Using the interpreter ----
 2 3 + .  10 4 - .  6 7 * .  CR                  \ 5 6 42 : a calculator
 1 2 SWAP . .  5 DUP * .  CR                     \ 1 2 25 : the stack
 WORD X (CREATE) 0 ,                             \ a variable by hand: a name, a cell
@@ -99,6 +103,9 @@ DEFER UNKNOWN  ' NOT-FOUND IS UNKNOWN
     THEN
   REPEAT ;
 INTERPRET
+</script>
+
+<script type="text/forth" id="mirror-demo">
 \ ---- From here, Forth's own INTERPRET is reading ----
 : SQUARE ( n -- n*n ) DUP * ;   5 SQUARE .  CR       \ 25: the compiler still works
 : SHRUG ( token -- ) DROP 0 . ;  ' SHRUG IS UNKNOWN  \ change the reader, in Forth:
@@ -123,7 +130,6 @@ function execute(w) {                                             // run one wor
   const base = R.length; w.code(w);
   while (R.length > base) { const x = th[ip++]; x.code(x); }     // NEXT, until it returns
 }
-
 // ---- The primitives: the only words written in JavaScript ----
 function stone() {
   S = []; R = []; M = [0]; dict = { EXIT, LIT };    // M[0] holds STATE
@@ -166,7 +172,6 @@ function stone() {
     latest.code = w => { S.push(w.addr); R.push([th, ip]); th = body; ip = at; };   // newest
     EXIT.code(); });                                                                  // word's action
 }
-
 // ---- The outer interpreter: read a token, find it, run it or build it in ----
 function interpret() {
   for (let t; (t = word()) !== 0; ) {
@@ -187,7 +192,7 @@ function go() {
 }
 const src = document.getElementById('src'), text = id => document.getElementById(id).textContent.trim() + '\n\n';
 function step(n) {                                  // each step brings the ones before it
-  src.value = n === 1 ? text('stone') : text('clay') + (n === 2 ? text('clay-demo') : text('mirror'));
+  src.value = n === 1 ? text('stone') + text('stone-demo') : text('clay') + (n === 2 ? text('clay-demo') : text('mirror') + text('mirror-demo'));
   document.querySelectorAll('button').forEach((b, i) => b.classList.toggle('on', i === n - 1));
   go();
 }
