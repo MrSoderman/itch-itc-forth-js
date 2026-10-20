@@ -102,6 +102,7 @@ The design is in the spirit of the PDP-11. It uses clean registers, a flat memor
 
 This is where ideas are tested first. ITCH explores how small, direct and efficient an ITC Forth can become, with more "biological" connections between its parts. It is the ground that will later grow into **ForthScript**.
 
+![ForthScript](docs/ForthScript.png)
 [ForthScript](https://www.forthscript.com)
 
 Expect this part to change often.
